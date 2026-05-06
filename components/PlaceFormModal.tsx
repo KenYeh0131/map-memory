@@ -344,7 +344,9 @@ export function PlaceFormModal({
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/50 p-3">
       <div className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-4 shadow-2xl">
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-lg font-semibold">{title}</h2>
+          <h2 className="text-lg font-bold text-slate-900">
+          {title}
+          </h2>
 
           <button
             type="button"
