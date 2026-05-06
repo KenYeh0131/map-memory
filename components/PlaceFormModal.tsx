@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import { Autocomplete, useJsApiLoader } from "@react-google-maps/api";
 import {
   RATING_OPTIONS,
   STATUS_OPTIONS,
@@ -8,11 +9,18 @@ import {
   type PlaceStatus,
 } from "@/lib/places";
 
+const libraries: ("places")[] = ["places"];
+
 export type PlaceFormValues = {
   name: string;
   status: PlaceStatus;
   address: string;
   rating: number;
+  photos: string[];
+  coverPhotoIndex: number;
+  completedDate: string;
+  lat?: number;
+  lng?: number;
   tagsText: string;
   navigationTarget: string;
   notes: string;
@@ -22,9 +30,26 @@ type PlaceFormModalProps = {
   isOpen: boolean;
   mode: "create" | "edit";
   initialPlace: PlaceItem | null;
+  availableTags?: string[];
   onClose: () => void;
   onSubmit: (values: PlaceFormValues) => void;
 };
+
+type PhotoPreviewState = {
+  photos: string[];
+  index: number;
+} | null;
+
+function todayText() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function parseTags(tagsText: string) {
+  return tagsText
+    .split(",")
+    .map((tag) => tag.trim())
+    .filter(Boolean);
+}
 
 function buildInitialValues(initialPlace: PlaceItem | null): PlaceFormValues {
   return {
@@ -32,6 +57,11 @@ function buildInitialValues(initialPlace: PlaceItem | null): PlaceFormValues {
     status: initialPlace?.status ?? "wantToGo",
     address: initialPlace?.address ?? "",
     rating: initialPlace?.rating ?? 0,
+    photos: initialPlace?.photos ?? [],
+    coverPhotoIndex: initialPlace?.coverPhotoIndex ?? 0,
+    completedDate: initialPlace?.completedDate ?? "",
+    lat: initialPlace?.lat,
+    lng: initialPlace?.lng,
     tagsText: initialPlace?.tags.join(", ") ?? "",
     navigationTarget: initialPlace?.navigationTarget ?? "",
     notes: initialPlace?.notes ?? "",
@@ -42,12 +72,32 @@ export function PlaceFormModal({
   isOpen,
   mode,
   initialPlace,
+  availableTags = [],
   onClose,
   onSubmit,
 }: PlaceFormModalProps) {
+  const addressAutocompleteRef =
+    useRef<google.maps.places.Autocomplete | null>(null);
+
+  const navigationAutocompleteRef =
+    useRef<google.maps.places.Autocomplete | null>(null);
+
+  const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? "";
+
+  const { isLoaded } = useJsApiLoader({
+    id: "map-memory-google-script",
+    googleMapsApiKey: apiKey,
+    libraries,
+  });
+
+  const [previewPhoto, setPreviewPhoto] = useState<PhotoPreviewState>(null);
+
   const [formValues, setFormValues] = useState<PlaceFormValues>(() =>
     buildInitialValues(initialPlace)
   );
+
+  const [newTagText, setNewTagText] = useState("");
+
   const [errors, setErrors] = useState<{ name?: string; address?: string }>({});
 
   const title = useMemo(
@@ -55,9 +105,21 @@ export function PlaceFormModal({
     [mode]
   );
 
-  if (!isOpen) {
-    return null;
-  }
+  const selectedTags = useMemo(
+    () => parseTags(formValues.tagsText),
+    [formValues.tagsText]
+  );
+
+  const tagOptions = useMemo(() => {
+    const tags = new Set<string>();
+
+    availableTags.forEach((tag) => tags.add(tag));
+    selectedTags.forEach((tag) => tags.add(tag));
+
+    return Array.from(tags).sort((a, b) => a.localeCompare(b));
+  }, [availableTags, selectedTags]);
+
+  if (!isOpen) return null;
 
   const handleChange = <K extends keyof PlaceFormValues>(
     key: K,
@@ -66,26 +128,224 @@ export function PlaceFormModal({
     setFormValues((prev) => ({ ...prev, [key]: value }));
   };
 
+  const handleAddressPlaceChanged = () => {
+    const place = addressAutocompleteRef.current?.getPlace();
+
+    if (!place) {
+      window.alert("沒有取得地點資料，請重新選擇一次");
+      return;
+    }
+
+    const lat = place.geometry?.location?.lat();
+    const lng = place.geometry?.location?.lng();
+
+    if (typeof lat !== "number" || typeof lng !== "number") {
+      window.alert("沒有取得經緯度，請改選 Google 下拉建議中的地點");
+      return;
+    }
+
+    setFormValues((prev) => ({
+      ...prev,
+
+      // 地點名稱：不覆蓋
+      name: prev.name,
+
+      // 地址：不覆蓋手動輸入內容
+      address: prev.address,
+
+      // 導航目標：只顯示 Google 地點標題
+      navigationTarget:
+      place.name
+      ?.replace(/[^\u4e00-\u9fa5（）()、・．.－\-\s]/g, "")
+      .trim() || place.name || prev.navigationTarget,
+
+      // 地址選擇只用來取得正確地標位置
+      lat,
+      lng,
+    }));
+  };
+
+  const handleNavigationPlaceChanged = () => {
+    const place = navigationAutocompleteRef.current?.getPlace();
+
+    if (!place) {
+      window.alert("沒有取得導航地點資料，請重新選擇一次");
+      return;
+    }
+
+    setFormValues((prev) => ({
+      ...prev,
+
+      // 地點名稱：不覆蓋
+      name: prev.name,
+
+      // 地址：不覆蓋
+      address: prev.address,
+
+      // 經緯度：不改，避免導航目標影響地標位置
+      lat: prev.lat,
+      lng: prev.lng,
+
+      // 導航目標：只顯示 Google 地點標題
+      navigationTarget:
+      place.name
+      ?.replace(/[^\u4e00-\u9fa5（）()、・．.－\-\s]/g, "")
+      .trim() || place.name || prev.navigationTarget,
+    }));
+  };
+
+  const handleStatusChange = (nextStatus: PlaceStatus) => {
+    setFormValues((prev) => ({
+      ...prev,
+      status: nextStatus,
+      completedDate:
+        nextStatus === "visited" ? prev.completedDate || todayText() : "",
+    }));
+  };
+
+  const syncTags = (nextTags: string[]) => {
+    handleChange("tagsText", Array.from(new Set(nextTags)).join(", "));
+  };
+
+  const toggleTag = (tag: string) => {
+    syncTags(
+      selectedTags.includes(tag)
+        ? selectedTags.filter((item) => item !== tag)
+        : [...selectedTags, tag]
+    );
+  };
+
+  const addNewTag = () => {
+    const nextTag = newTagText.trim();
+
+    if (!nextTag) return;
+
+    syncTags([...selectedTags, nextTag]);
+    setNewTagText("");
+  };
+
   const handleValidateAndSubmit = () => {
     const nextErrors: { name?: string; address?: string } = {};
+
     if (!formValues.name.trim()) {
       nextErrors.name = "地點名稱為必填";
     }
+
     if (!formValues.address.trim()) {
       nextErrors.address = "地址為必填";
     }
+
     setErrors(nextErrors);
-    if (Object.keys(nextErrors).length > 0) {
+
+    if (Object.keys(nextErrors).length > 0) return;
+
+    const safeCoverPhotoIndex =
+      formValues.photos.length === 0
+        ? 0
+        : Math.min(
+            Math.max(formValues.coverPhotoIndex, 0),
+            formValues.photos.length - 1
+          );
+
+    onSubmit({
+      ...formValues,
+      coverPhotoIndex: safeCoverPhotoIndex,
+      completedDate:
+        formValues.status === "visited" ? formValues.completedDate : "",
+    });
+  };
+
+  const handlePhotoUpload = async (files: FileList | null) => {
+    if (!files) return;
+
+    const remain = Math.max(0, 5 - formValues.photos.length);
+
+    if (remain === 0) {
+      window.alert("每個地點最多 5 張照片");
       return;
     }
-    onSubmit(formValues);
+
+    const selectedFiles = Array.from(files).slice(0, remain);
+
+    const base64Photos = await Promise.all(
+      selectedFiles.map(
+        (file) =>
+          new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+
+            reader.onload = () => resolve(String(reader.result ?? ""));
+            reader.onerror = () => reject(new Error("read photo failed"));
+            reader.readAsDataURL(file);
+          })
+      )
+    );
+
+    setFormValues((prev) => {
+      const nextPhotos = [...prev.photos, ...base64Photos].slice(0, 5);
+
+      return {
+        ...prev,
+        photos: nextPhotos,
+        coverPhotoIndex:
+          prev.photos.length === 0 && nextPhotos.length > 0
+            ? 0
+            : Math.min(prev.coverPhotoIndex, Math.max(0, nextPhotos.length - 1)),
+      };
+    });
+  };
+
+  const handleDeletePhoto = (index: number) => {
+    setFormValues((prev) => {
+      const nextPhotos = prev.photos.filter((_, idx) => idx !== index);
+
+      let nextCoverPhotoIndex = prev.coverPhotoIndex;
+
+      if (nextPhotos.length === 0) {
+        nextCoverPhotoIndex = 0;
+      } else if (prev.coverPhotoIndex === index) {
+        nextCoverPhotoIndex = Math.min(index, nextPhotos.length - 1);
+      } else if (prev.coverPhotoIndex > index) {
+        nextCoverPhotoIndex = prev.coverPhotoIndex - 1;
+      }
+
+      return {
+        ...prev,
+        photos: nextPhotos,
+        coverPhotoIndex: nextCoverPhotoIndex,
+      };
+    });
+  };
+
+  const closePreview = () => setPreviewPhoto(null);
+
+  const showPrevPhoto = () => {
+    setPreviewPhoto((prev) =>
+      prev
+        ? {
+            ...prev,
+            index: (prev.index - 1 + prev.photos.length) % prev.photos.length,
+          }
+        : prev
+    );
+  };
+
+  const showNextPhoto = () => {
+    setPreviewPhoto((prev) =>
+      prev
+        ? {
+            ...prev,
+            index: (prev.index + 1) % prev.photos.length,
+          }
+        : prev
+    );
   };
 
   return (
-    <div className="fixed inset-0 z-20 flex items-end justify-center bg-slate-900/50 p-3">
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/50 p-3">
       <div className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-4 shadow-2xl">
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-lg font-semibold">{title}</h2>
+
           <button
             type="button"
             onClick={onClose}
@@ -97,23 +357,34 @@ export function PlaceFormModal({
 
         <div className="space-y-3">
           <label className="block text-sm">
-            <span className="mb-1 block font-medium">地點名稱 *</span>
+            <span className="mb-1 block font-medium">
+              地點名稱
+              <span className="ml-1 text-red-500">(必填)</span>
+            </span>
+
             <input
               value={formValues.name}
               onChange={(event) => handleChange("name", event.target.value)}
               className="w-full rounded-lg border border-slate-300 px-3 py-2"
             />
+
             {errors.name ? (
-              <span className="mt-1 block text-xs text-rose-600">{errors.name}</span>
+              <span className="mt-1 block text-xs text-rose-600">
+                {errors.name}
+              </span>
             ) : null}
           </label>
 
           <label className="block text-sm">
-            <span className="mb-1 block font-medium">狀態 *</span>
+            <span className="mb-1 block font-medium">
+              狀態
+              <span className="ml-1 text-red-500">(必填)</span>
+            </span>
+
             <select
               value={formValues.status}
               onChange={(event) =>
-                handleChange("status", event.target.value as PlaceStatus)
+                handleStatusChange(event.target.value as PlaceStatus)
               }
               className="w-full rounded-lg border border-slate-300 px-3 py-2"
             >
@@ -125,22 +396,79 @@ export function PlaceFormModal({
             </select>
           </label>
 
+          {formValues.status === "visited" ? (
+            <label className="block text-sm">
+              <span className="mb-1 block font-medium">完成日期</span>
+
+              <input
+                type="date"
+                value={formValues.completedDate || todayText()}
+                onChange={(event) =>
+                  handleChange("completedDate", event.target.value)
+                }
+                className="w-full rounded-lg border border-slate-300 px-3 py-2"
+              />
+            </label>
+          ) : null}
+
           <label className="block text-sm">
-            <span className="mb-1 block font-medium">地址 *</span>
-            <input
-              value={formValues.address}
-              onChange={(event) => handleChange("address", event.target.value)}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2"
-            />
+            <span className="mb-1 block font-medium">
+              地址
+              <span className="ml-1 text-red-500">(必填)</span>
+            </span>
+
+            {isLoaded ? (
+              <Autocomplete
+                onLoad={(autocomplete) => {
+                  addressAutocompleteRef.current = autocomplete;
+                }}
+                onPlaceChanged={handleAddressPlaceChanged}
+                options={{
+                  fields: ["name", "formatted_address", "geometry.location"],
+                  componentRestrictions: { country: "tw" },
+                }}
+              >
+                <input
+                  value={formValues.address}
+                  onChange={(event) =>
+                    handleChange("address", event.target.value)
+                  }
+                  placeholder="輸入地址或地標，例如：淡水漁人碼頭"
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                />
+              </Autocomplete>
+            ) : (
+              <input
+                value={formValues.address}
+                onChange={(event) =>
+                  handleChange("address", event.target.value)
+                }
+                placeholder="輸入地址或地標，例如：淡水漁人碼頭"
+                className="w-full rounded-lg border border-slate-300 px-3 py-2"
+              />
+            )}
+
             {errors.address ? (
               <span className="mt-1 block text-xs text-rose-600">
                 {errors.address}
               </span>
             ) : null}
+
+            {formValues.lat && formValues.lng ? (
+              <span className="mt-1 block text-[11px] text-slate-400">
+                已取得位置：{formValues.lat.toFixed(5)},{" "}
+                {formValues.lng.toFixed(5)}
+              </span>
+            ) : (
+              <span className="mt-1 block text-[11px] text-orange-500">
+                請從搜尋建議中選擇地點，才能取得正確地標位置
+              </span>
+            )}
           </label>
 
           <label className="block text-sm">
             <span className="mb-1 block font-medium">喜歡程度（0~5）</span>
+
             <select
               value={formValues.rating}
               onChange={(event) =>
@@ -156,29 +484,191 @@ export function PlaceFormModal({
             </select>
           </label>
 
-          <label className="block text-sm">
-            <span className="mb-1 block font-medium">標籤（逗號分隔）</span>
+          <div className="block text-sm">
+            <span className="mb-1 block font-medium">地點照片（最多 5 張）</span>
+
             <input
-              value={formValues.tagsText}
-              onChange={(event) => handleChange("tagsText", event.target.value)}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2"
-              placeholder="海景, 約會, 晚上"
+              type="file"
+              accept="image/*"
+              multiple
+              onChange={(event) => {
+                handlePhotoUpload(event.target.files).catch(() => {
+                  window.alert("照片讀取失敗，請重新上傳");
+                });
+
+                event.target.value = "";
+              }}
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
             />
-          </label>
+
+            <p className="mt-1 text-xs text-slate-500">
+              已上傳 {formValues.photos.length}/5
+            </p>
+
+            {formValues.photos.length > 0 ? (
+              <div className="mt-2 grid grid-cols-3 gap-2">
+                {formValues.photos.map((photo, index) => {
+                  const isCover = formValues.coverPhotoIndex === index;
+
+                  return (
+                    <div
+                      key={`${photo.slice(0, 32)}-${index}`}
+                      className={`overflow-hidden rounded-lg border bg-slate-100 ${
+                        isCover
+                          ? "border-orange-500 ring-2 ring-orange-200"
+                          : "border-slate-200"
+                      }`}
+                    >
+                      <div className="relative">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setPreviewPhoto({
+                              photos: formValues.photos,
+                              index,
+                            })
+                          }
+                          className="block w-full"
+                        >
+                          <img
+                            src={photo}
+                            alt={`photo-${index + 1}`}
+                            className="h-20 w-full object-cover"
+                          />
+                        </button>
+
+                        {isCover ? (
+                          <span className="absolute left-1 top-1 rounded-full bg-orange-500 px-1.5 py-0.5 text-[10px] font-bold text-white">
+                            封面
+                          </span>
+                        ) : null}
+
+                        <button
+                          type="button"
+                          onClick={() => handleDeletePhoto(index)}
+                          className="absolute right-1 top-1 rounded-full bg-slate-900/75 px-1.5 py-0.5 text-xs text-white"
+                        >
+                          ✕
+                        </button>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => handleChange("coverPhotoIndex", index)}
+                        className={`w-full px-2 py-1.5 text-[11px] font-semibold ${
+                          isCover
+                            ? "bg-orange-500 text-white"
+                            : "bg-white text-slate-600"
+                        }`}
+                      >
+                        {isCover ? "目前封面" : "設為封面"}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
+          </div>
+
+          <div className="rounded-xl border border-slate-200 bg-white p-3">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-sm font-medium">標籤（可複選）</span>
+
+              <span className="text-xs text-slate-500">
+                已選 {selectedTags.length}
+              </span>
+            </div>
+
+            {tagOptions.length > 0 ? (
+              <div className="flex flex-wrap gap-1.5">
+                {tagOptions.map((tag) => {
+                  const checked = selectedTags.includes(tag);
+
+                  return (
+                    <button
+                      key={tag}
+                      type="button"
+                      onClick={() => toggleTag(tag)}
+                      className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${
+                        checked
+                          ? "border-slate-900 bg-slate-900 text-white"
+                          : "border-slate-200 bg-slate-50 text-slate-600"
+                      }`}
+                    >
+                      {checked ? "✓ " : ""}
+                      #{tag}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="text-xs text-slate-400">
+                尚無既有標籤，可在下方新增。
+              </p>
+            )}
+
+            <div className="mt-3 flex gap-2">
+              <input
+                value={newTagText}
+                onChange={(event) => setNewTagText(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    addNewTag();
+                  }
+                }}
+                placeholder="新增標籤，例如：咖啡、景點"
+                className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              />
+
+              <button
+                type="button"
+                onClick={addNewTag}
+                className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white"
+              >
+                新增
+              </button>
+            </div>
+          </div>
 
           <label className="block text-sm">
             <span className="mb-1 block font-medium">導航目標</span>
-            <input
-              value={formValues.navigationTarget}
-              onChange={(event) =>
-                handleChange("navigationTarget", event.target.value)
-              }
-              className="w-full rounded-lg border border-slate-300 px-3 py-2"
-            />
+
+            {isLoaded ? (
+              <Autocomplete
+                onLoad={(autocomplete) => {
+                  navigationAutocompleteRef.current = autocomplete;
+                }}
+                onPlaceChanged={handleNavigationPlaceChanged}
+                options={{
+                  fields: ["name", "formatted_address", "geometry.location"],
+                  componentRestrictions: { country: "tw" },
+                }}
+              >
+                <input
+                  value={formValues.navigationTarget}
+                  onChange={(event) =>
+                    handleChange("navigationTarget", event.target.value)
+                  }
+                  placeholder="輸入導航目標，例如：漁人碼頭"
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                />
+              </Autocomplete>
+            ) : (
+              <input
+                value={formValues.navigationTarget}
+                onChange={(event) =>
+                  handleChange("navigationTarget", event.target.value)
+                }
+                placeholder="輸入導航目標，例如：漁人碼頭"
+                className="w-full rounded-lg border border-slate-300 px-3 py-2"
+              />
+            )}
           </label>
 
           <label className="block text-sm">
             <span className="mb-1 block font-medium">筆記</span>
+
             <textarea
               value={formValues.notes}
               onChange={(event) => handleChange("notes", event.target.value)}
@@ -196,6 +686,61 @@ export function PlaceFormModal({
           {mode === "create" ? "新增地點" : "儲存變更"}
         </button>
       </div>
+
+      {previewPhoto ? (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/80 p-4"
+          onClick={closePreview}
+        >
+          <div
+            className="relative flex max-h-[90vh] w-full max-w-5xl items-center justify-center"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button
+              type="button"
+              onClick={closePreview}
+              className="absolute right-2 top-2 z-10 rounded-full bg-black/60 px-3 py-1.5 text-sm font-bold text-white"
+              aria-label="關閉預覽"
+            >
+              ✕
+            </button>
+
+            {previewPhoto.photos.length > 1 ? (
+              <button
+                type="button"
+                onClick={showPrevPhoto}
+                className="absolute left-2 z-10 flex h-11 w-11 items-center justify-center rounded-full bg-black/60 text-2xl font-bold text-white"
+                aria-label="上一張"
+              >
+                ‹
+              </button>
+            ) : null}
+
+            <img
+              src={previewPhoto.photos[previewPhoto.index]}
+              alt={`preview-${previewPhoto.index + 1}`}
+              className="max-h-[85vh] max-w-[90vw] rounded-lg object-contain"
+            />
+
+            {previewPhoto.photos.length > 1 ? (
+              <button
+                type="button"
+                onClick={showNextPhoto}
+                className="absolute right-2 z-10 flex h-11 w-11 items-center justify-center rounded-full bg-black/60 text-2xl font-bold text-white"
+                aria-label="下一張"
+              >
+                ›
+              </button>
+            ) : null}
+
+            {previewPhoto.photos.length > 1 ? (
+              <div className="absolute bottom-2 left-1/2 -translate-x-1/2 rounded-full bg-black/60 px-3 py-1 text-xs font-semibold text-white">
+                {previewPhoto.index + 1} / {previewPhoto.photos.length}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -15,8 +15,8 @@ type BottomNavProps = {
 
 export function BottomNav({ activeTab, onChange }: BottomNavProps) {
   return (
-    <nav className="fixed inset-x-0 bottom-0 mx-auto w-full max-w-md border-t border-slate-200 bg-white/95 pb-safe shadow-[0_-4px_16px_rgba(15,23,42,0.08)] backdrop-blur">
-      <div className="grid grid-cols-3">
+    <nav className="fixed inset-x-0 bottom-0 mx-auto w-full max-w-md rounded-t-2xl border border-slate-200/80 border-b-0 bg-white/95 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-1 shadow-[0_-8px_28px_rgba(15,23,42,0.08)] backdrop-blur-md">
+      <div className="grid grid-cols-3 px-1">
         {tabItems.map((tab) => {
           const isActive = activeTab === tab.id;
           return (
@@ -24,12 +24,14 @@ export function BottomNav({ activeTab, onChange }: BottomNavProps) {
               key={tab.id}
               type="button"
               onClick={() => onChange(tab.id)}
-              className={`flex flex-col items-center gap-1 px-2 py-3 text-xs ${
-                isActive ? "text-orange-500" : "text-slate-500"
+              className={`flex flex-col items-center gap-0.5 rounded-xl px-2 py-2.5 text-[11px] transition-colors ${
+                isActive
+                  ? "bg-orange-50 font-semibold text-orange-600"
+                  : "font-medium text-slate-500 hover:text-slate-700"
               }`}
             >
-              <span className="text-lg">{tab.icon}</span>
-              <span className="font-medium">{tab.label}</span>
+              <span className="text-lg leading-none">{tab.icon}</span>
+              <span>{tab.label}</span>
             </button>
           );
         })}
