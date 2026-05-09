@@ -54,7 +54,7 @@ const NICKNAME_STORAGE_KEY = "map-memory-nickname-v1";
 
 const defaultFilters: PlaceFilters = {
   keyword: "",
-  status: "all",
+  status: "wantToGo",
   minRating: "all",
   tags: [],
 };

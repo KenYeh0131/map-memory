@@ -28,7 +28,7 @@ type PhotoPreviewState = {
 
 const defaultMapFilters: MapFilterState = {
   showWant: true,
-  showCompleted: true,
+  showCompleted: false,
   query: "",
   stars: [],
   tags: [],
