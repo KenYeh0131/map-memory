@@ -32,15 +32,25 @@ export type MapGroup = {
   inviteCode?: string;
 };
 
+export type JoinRequest = {
+  id: string;
+  nickname: string;
+  deviceId: string;
+  status: "pending" | "approved" | "rejected";
+  createdAt: string;
+  updatedAt?: string;
+  reviewedAt?: string;
+};
+
 const FALLBACK_GROUPS: MapGroup[] = [
-  { id: "family", name: "家庭地圖", inviteCode: "FAMILY888" },
-  { id: "friends", name: "朋友地圖" },
-  { id: "personal", name: "我的地圖" },
+  { id: "family", name: "我們的回憶地圖", inviteCode: "FAMILY888" },
 ];
 
 const DEFAULT_GROUP_ID = "family";
 const CURRENT_GROUP_STORAGE_KEY = "map-memory-current-group-v1";
 const JOINED_GROUPS_STORAGE_KEY = "map-memory-joined-groups-v1";
+const DEVICE_ID_STORAGE_KEY = "map-memory-device-id-v1";
+const NICKNAME_STORAGE_KEY = "map-memory-nickname-v1";
 
 const defaultFilters: PlaceFilters = {
   keyword: "",
@@ -76,15 +86,6 @@ function normalizePlace(id: string, data: Partial<PlaceItem>): PlaceItem {
   };
 }
 
-function getInitialGroupId() {
-  if (typeof window === "undefined") {
-    return DEFAULT_GROUP_ID;
-  }
-
-  return (
-    window.localStorage.getItem(CURRENT_GROUP_STORAGE_KEY) ?? DEFAULT_GROUP_ID
-  );
-}
 
 function loadJoinedGroupIds() {
   if (typeof window === "undefined") {
@@ -119,6 +120,33 @@ function loadJoinedGroupIds() {
   } catch {
     return FALLBACK_GROUPS.map((group) => group.id);
   }
+}
+
+function getOrCreateDeviceId() {
+  if (typeof window === "undefined") {
+    return "device-server";
+  }
+
+  const existingDeviceId = window.localStorage.getItem(DEVICE_ID_STORAGE_KEY);
+
+  if (existingDeviceId) {
+    return existingDeviceId;
+  }
+
+  const newDeviceId = `device-${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2, 10)}`;
+
+  window.localStorage.setItem(DEVICE_ID_STORAGE_KEY, newDeviceId);
+  return newDeviceId;
+}
+
+function loadNickname() {
+  if (typeof window === "undefined") {
+    return "";
+  }
+
+  return window.localStorage.getItem(NICKNAME_STORAGE_KEY) ?? "";
 }
 
 function createGroupId(groupName: string) {
@@ -176,13 +204,20 @@ export default function Home() {
   const [joinedGroupIds, setJoinedGroupIds] = useState<string[]>(() =>
     loadJoinedGroupIds()
   );
-  const [currentGroupId, setCurrentGroupId] = useState(() =>
-    getInitialGroupId()
-  );
+  const [currentGroupId, setCurrentGroupId] = useState(DEFAULT_GROUP_ID);
+  const [deviceId] = useState(() => getOrCreateDeviceId());
+  const [nickname, setNickname] = useState(() => loadNickname());
   const [newGroupName, setNewGroupName] = useState("");
   const [joinInviteCode, setJoinInviteCode] = useState("");
+  const [joinRequests, setJoinRequests] = useState<JoinRequest[]>([]);
   const [isCreatingGroup, setIsCreatingGroup] = useState(false);
-  const [isJoiningGroup, setIsJoiningGroup] = useState(false);
+  const [isRequestingJoin, setIsRequestingJoin] = useState(false);
+  const [isApprovingRequestId, setIsApprovingRequestId] = useState<string | null>(
+    null
+  );
+  const [isRejectingRequestId, setIsRejectingRequestId] = useState<string | null>(
+    null
+  );
   const [isLeavingGroup, setIsLeavingGroup] = useState(false);
   const [isDeletingGroup, setIsDeletingGroup] = useState(false);
   const [places, setPlaces] = useState<PlaceItem[]>([]);
@@ -199,25 +234,42 @@ export default function Home() {
   );
 
   const safeCurrentGroupId =
-  mapGroups.some((group) => group.id === currentGroupId) ||
-  mapGroups.length === 0
-    ? currentGroupId
-    : mapGroups[0].id;
+    mapGroups.some((group) => group.id === currentGroupId) ||
+    mapGroups.length === 0
+      ? currentGroupId
+      : mapGroups[0].id;
 
-const currentGroup =
-  mapGroups.find((group) => group.id === safeCurrentGroupId) ??
-  mapGroups[0];
+  const currentGroup =
+    mapGroups.find((group) => group.id === safeCurrentGroupId) ?? mapGroups[0];
 
-const currentGroupName = currentGroup?.name ?? "尚未選擇地圖群";
+  const currentGroupName = currentGroup?.name ?? "尚未選擇地圖群";
+  const currentInviteCode = currentGroup?.inviteCode ?? "";
 
-const currentInviteCode = currentGroup?.inviteCode ?? "";
+  const groupsCollectionRef = useMemo(() => collection(db, "groups"), []);
 
-const groupsCollectionRef = useMemo(() => collection(db, "groups"), []);
+  const placesCollectionRef = useMemo(
+    () => collection(db, "groups", safeCurrentGroupId, "places"),
+    [safeCurrentGroupId]
+  );
 
-const placesCollectionRef = useMemo(
-  () => collection(db, "groups", safeCurrentGroupId, "places"),
-  [safeCurrentGroupId]
-);
+  const joinRequestsCollectionRef = useMemo(
+    () => collection(db, "groups", safeCurrentGroupId, "joinRequests"),
+    [safeCurrentGroupId]
+  );
+
+  useEffect(() => {
+    const savedGroupId = window.localStorage.getItem(
+      CURRENT_GROUP_STORAGE_KEY
+    );
+  
+    if (!savedGroupId) {
+      return;
+    }
+  
+    window.setTimeout(() => {
+      setCurrentGroupId(savedGroupId);
+    }, 0);
+  }, []);
 
   useEffect(() => {
     window.localStorage.setItem(CURRENT_GROUP_STORAGE_KEY, currentGroupId);
@@ -229,6 +281,10 @@ const placesCollectionRef = useMemo(
       JSON.stringify(joinedGroupIds)
     );
   }, [joinedGroupIds]);
+
+  useEffect(() => {
+    window.localStorage.setItem(NICKNAME_STORAGE_KEY, nickname);
+  }, [nickname]);
 
   useEffect(() => {
     const unsubscribe = onSnapshot(groupsCollectionRef, async (snapshot) => {
@@ -278,6 +334,82 @@ const placesCollectionRef = useMemo(
     return () => unsubscribe();
   }, [groupsCollectionRef]);
 
+  useEffect(() => {
+    if (allGroups.length === 0) {
+      return;
+    }
+  
+    const unsubscribes = allGroups.map((group) => {
+      const requestRef = doc(
+        db,
+        "groups",
+        group.id,
+        "joinRequests",
+        deviceId
+      );
+  
+      return onSnapshot(requestRef, (snapshot) => {
+        if (!snapshot.exists()) {
+          return;
+        }
+  
+        const data = snapshot.data();
+  
+        if (data.status === "approved") {
+          setJoinedGroupIds((prev) => {
+            if (prev.includes(group.id)) {
+              return prev;
+            }
+  
+            return [...prev, group.id];
+          });
+        }
+      });
+    });
+  
+    return () => {
+      unsubscribes.forEach((unsubscribe) => unsubscribe());
+    };
+  }, [allGroups, deviceId]);
+
+  useEffect(() => {
+    const requestsQuery = query(
+      joinRequestsCollectionRef,
+      orderBy("createdAt", "desc")
+    );
+
+    const unsubscribe = onSnapshot(requestsQuery, (snapshot) => {
+      const nextRequests = snapshot.docs
+        .map((documentSnapshot) => {
+          const data = documentSnapshot.data();
+
+          return {
+            id: documentSnapshot.id,
+            nickname:
+              typeof data.nickname === "string" ? data.nickname : "未命名",
+            deviceId:
+              typeof data.deviceId === "string" ? data.deviceId : "unknown",
+            status:
+              data.status === "approved" || data.status === "rejected"
+                ? data.status
+                : "pending",
+            createdAt:
+              typeof data.createdAt === "string"
+                ? data.createdAt
+                : new Date().toISOString(),
+            updatedAt:
+              typeof data.updatedAt === "string" ? data.updatedAt : undefined,
+            reviewedAt:
+              typeof data.reviewedAt === "string" ? data.reviewedAt : undefined,
+          } satisfies JoinRequest;
+        })
+        .filter((request) => request.status === "pending");
+
+      setJoinRequests(nextRequests);
+    });
+
+    return () => unsubscribe();
+  }, [joinRequestsCollectionRef]);
 
   useEffect(() => {
     const placesQuery = query(placesCollectionRef, orderBy("updatedAt", "desc"));
@@ -413,15 +545,21 @@ const placesCollectionRef = useMemo(
     }
   };
 
-  const handleJoinGroup = async () => {
+  const handleRequestJoinGroup = async () => {
     const normalizedInviteCode = joinInviteCode.trim().toUpperCase();
+    const trimmedNickname = nickname.trim();
+
+    if (!trimmedNickname) {
+      window.alert("請先輸入你的暱稱，這樣對方才知道是誰申請加入");
+      return;
+    }
 
     if (!normalizedInviteCode) {
       window.alert("請輸入邀請碼");
       return;
     }
 
-    setIsJoiningGroup(true);
+    setIsRequestingJoin(true);
 
     try {
       const groupsSnapshot = await getDocs(collection(db, "groups"));
@@ -458,17 +596,70 @@ const placesCollectionRef = useMemo(
         return;
       }
 
-      setAllGroups((prev) => mergeGroups([...prev, matchedGroup]));
-      setJoinedGroupIds((prev) =>
-        Array.from(new Set([...prev, matchedGroup.id]))
+      if (joinedGroupIds.includes(matchedGroup.id)) {
+        window.alert("你已經加入這個地圖群了");
+        handleChangeGroup(matchedGroup.id);
+        return;
+      }
+
+      await setDoc(
+        doc(db, "groups", matchedGroup.id, "joinRequests", deviceId),
+        {
+          nickname: trimmedNickname,
+          deviceId,
+          status: "pending",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }
       );
+
       setJoinInviteCode("");
-      handleChangeGroup(matchedGroup.id);
+      window.alert("已送出加入申請，請等待對方同意");
     } catch (error) {
       console.error(error);
-      window.alert("加入地圖群失敗，請稍後再試");
+      window.alert("送出加入申請失敗，請稍後再試");
     } finally {
-      setIsJoiningGroup(false);
+      setIsRequestingJoin(false);
+    }
+  };
+
+  const handleApproveJoinRequest = async (requestId: string) => {
+    setIsApprovingRequestId(requestId);
+
+    try {
+      await updateDoc(
+        doc(db, "groups", safeCurrentGroupId, "joinRequests", requestId),
+        {
+          status: "approved",
+          reviewedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }
+      );
+    } catch (error) {
+      console.error(error);
+      window.alert("同意加入失敗，請稍後再試");
+    } finally {
+      setIsApprovingRequestId(null);
+    }
+  };
+
+  const handleRejectJoinRequest = async (requestId: string) => {
+    setIsRejectingRequestId(requestId);
+
+    try {
+      await updateDoc(
+        doc(db, "groups", safeCurrentGroupId, "joinRequests", requestId),
+        {
+          status: "rejected",
+          reviewedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }
+      );
+    } catch (error) {
+      console.error(error);
+      window.alert("拒絕加入失敗，請稍後再試");
+    } finally {
+      setIsRejectingRequestId(null);
     }
   };
 
@@ -543,6 +734,18 @@ const placesCollectionRef = useMemo(
         )
       );
 
+      const requestsSnapshot = await getDocs(
+        collection(db, "groups", currentGroup.id, "joinRequests")
+      );
+
+      await Promise.all(
+        requestsSnapshot.docs.map((requestDocument) =>
+          deleteDoc(
+            doc(db, "groups", currentGroup.id, "joinRequests", requestDocument.id)
+          )
+        )
+      );
+
       await deleteDoc(doc(db, "groups", currentGroup.id, "info", "meta"));
       await deleteDoc(doc(db, "groups", currentGroup.id));
 
@@ -598,7 +801,7 @@ const placesCollectionRef = useMemo(
         };
 
         await setDoc(
-          doc(db, "groups", currentGroupId, "places", placeId),
+          doc(db, "groups", safeCurrentGroupId, "places", placeId),
           newPlace
         );
 
@@ -622,7 +825,7 @@ const placesCollectionRef = useMemo(
         };
 
         await updateDoc(
-          doc(db, "groups", currentGroupId, "places", editingPlace.id),
+          doc(db, "groups", safeCurrentGroupId, "places", editingPlace.id),
           updatedPlace
         );
 
@@ -638,7 +841,7 @@ const placesCollectionRef = useMemo(
 
   const handleDeletePlace = async (placeId: string) => {
     try {
-      await deleteDoc(doc(db, "groups", currentGroupId, "places", placeId));
+      await deleteDoc(doc(db, "groups", safeCurrentGroupId, "places", placeId));
       setSelectedPlaceId((prev) => (prev === placeId ? null : prev));
     } catch (error) {
       console.error(error);
@@ -684,7 +887,7 @@ const placesCollectionRef = useMemo(
             </span>
 
             <select
-              value={currentGroupId}
+              value={safeCurrentGroupId}
               onChange={(event) => handleChangeGroup(event.target.value)}
               className="min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-sm font-semibold text-slate-800 outline-none focus:border-orange-400"
               aria-label="切換地圖群"
@@ -737,23 +940,30 @@ const placesCollectionRef = useMemo(
         <SettingsView
           currentGroupName={currentGroupName}
           currentInviteCode={currentInviteCode}
+          nickname={nickname}
           newGroupName={newGroupName}
           joinInviteCode={joinInviteCode}
+          joinRequests={joinRequests}
           isCreatingGroup={isCreatingGroup}
-          isJoiningGroup={isJoiningGroup}
+          isRequestingJoin={isRequestingJoin}
+          isApprovingRequestId={isApprovingRequestId}
+          isRejectingRequestId={isRejectingRequestId}
           isLeavingGroup={isLeavingGroup}
           isDeletingGroup={isDeletingGroup}
+          onNicknameChange={setNickname}
           onNewGroupNameChange={setNewGroupName}
           onJoinInviteCodeChange={setJoinInviteCode}
           onCreateGroup={handleCreateGroup}
-          onJoinGroup={handleJoinGroup}
+          onRequestJoinGroup={handleRequestJoinGroup}
+          onApproveJoinRequest={handleApproveJoinRequest}
+          onRejectJoinRequest={handleRejectJoinRequest}
           onLeaveGroup={handleLeaveCurrentGroup}
           onDeleteGroup={handleDeleteCurrentGroup}
         />
       )}
 
       <PlaceFormModal
-        key={`${currentGroupId}-${formMode}-${editingPlace?.id ?? "new"}-${
+        key={`${safeCurrentGroupId}-${formMode}-${editingPlace?.id ?? "new"}-${
           isFormOpen ? "open" : "closed"
         }`}
         isOpen={isFormOpen}
