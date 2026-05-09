@@ -24,7 +24,19 @@ import type { PlaceItem } from "@/lib/places";
 
 type TabId = "map" | "list" | "settings";
 
-const GROUP_ID = "family";
+type MapGroup = {
+  id: string;
+  name: string;
+};
+
+const MAP_GROUPS: MapGroup[] = [
+  { id: "family", name: "家庭地圖" },
+  { id: "friends", name: "朋友地圖" },
+  { id: "personal", name: "我的地圖" },
+];
+
+const DEFAULT_GROUP_ID = "family";
+const CURRENT_GROUP_STORAGE_KEY = "map-memory-current-group-v1";
 
 const defaultFilters: PlaceFilters = {
   keyword: "",
@@ -60,8 +72,22 @@ function normalizePlace(id: string, data: Partial<PlaceItem>): PlaceItem {
   };
 }
 
+function getInitialGroupId() {
+  if (typeof window === "undefined") {
+    return DEFAULT_GROUP_ID;
+  }
+
+  const savedGroupId = window.localStorage.getItem(CURRENT_GROUP_STORAGE_KEY);
+  const isValidGroup = MAP_GROUPS.some((group) => group.id === savedGroupId);
+
+  return isValidGroup && savedGroupId ? savedGroupId : DEFAULT_GROUP_ID;
+}
+
 export default function Home() {
   const [activeTab, setActiveTab] = useState<TabId>("map");
+  const [currentGroupId, setCurrentGroupId] = useState(() =>
+    getInitialGroupId()
+  );
   const [places, setPlaces] = useState<PlaceItem[]>([]);
   const [selectedPlaceId, setSelectedPlaceId] = useState<string | null>(null);
   const [filters, setFilters] = useState<PlaceFilters>(() => defaultFilters);
@@ -70,10 +96,17 @@ export default function Home() {
   const [editingPlace, setEditingPlace] = useState<PlaceItem | null>(null);
   const [isLoadingPlaces, setIsLoadingPlaces] = useState(true);
 
+  const currentGroupName =
+    MAP_GROUPS.find((group) => group.id === currentGroupId)?.name ?? "家庭地圖";
+
   const placesCollectionRef = useMemo(
-    () => collection(db, "groups", GROUP_ID, "places"),
-    []
+    () => collection(db, "groups", currentGroupId, "places"),
+    [currentGroupId]
   );
+
+  useEffect(() => {
+    window.localStorage.setItem(CURRENT_GROUP_STORAGE_KEY, currentGroupId);
+  }, [currentGroupId]);
 
   useEffect(() => {
     const placesQuery = query(placesCollectionRef, orderBy("updatedAt", "desc"));
@@ -154,6 +187,15 @@ export default function Home() {
     setEditingPlace(null);
   };
 
+  const handleChangeGroup = (groupId: string) => {
+    setSelectedPlaceId(null);
+    setEditingPlace(null);
+    setIsFormOpen(false);
+    setPlaces([]);
+    setIsLoadingPlaces(true);
+    setCurrentGroupId(groupId);
+  };
+
   const handleSubmitForm = async (values: PlaceFormValues) => {
     const now = new Date().toISOString();
 
@@ -180,7 +222,11 @@ export default function Home() {
           updatedAt: now,
         };
 
-        await setDoc(doc(db, "groups", GROUP_ID, "places", placeId), newPlace);
+        await setDoc(
+          doc(db, "groups", currentGroupId, "places", placeId),
+          newPlace
+        );
+
         setSelectedPlaceId(placeId);
       } else if (editingPlace) {
         const updatedPlace: Partial<PlaceItem> = {
@@ -201,7 +247,7 @@ export default function Home() {
         };
 
         await updateDoc(
-          doc(db, "groups", GROUP_ID, "places", editingPlace.id),
+          doc(db, "groups", currentGroupId, "places", editingPlace.id),
           updatedPlace
         );
 
@@ -217,7 +263,7 @@ export default function Home() {
 
   const handleDeletePlace = async (placeId: string) => {
     try {
-      await deleteDoc(doc(db, "groups", GROUP_ID, "places", placeId));
+      await deleteDoc(doc(db, "groups", currentGroupId, "places", placeId));
       setSelectedPlaceId((prev) => (prev === placeId ? null : prev));
     } catch (error) {
       console.error(error);
@@ -240,20 +286,45 @@ export default function Home() {
             : "mb-4"
         }
       >
-        <div className="flex items-center gap-3 rounded-xl border border-slate-100 bg-white px-3 py-2.5 shadow-sm">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-orange-500 text-lg text-white">
-            ♥
+        <div className="flex flex-col gap-2 rounded-xl border border-slate-100 bg-white px-3 py-2.5 shadow-sm">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-orange-500 text-lg text-white">
+              ♥
+            </div>
+
+            <div className="min-w-0 flex-1">
+              <h1 className="truncate text-lg font-bold tracking-tight text-slate-900">
+                我們的地圖回憶
+              </h1>
+
+              <p className="text-[10px] font-medium uppercase tracking-wider text-slate-400">
+                Google Maps · 雲端共享
+              </p>
+            </div>
           </div>
 
-          <div className="min-w-0">
-            <h1 className="truncate text-lg font-bold tracking-tight text-slate-900">
-              我們的地圖回憶
-            </h1>
+          <div className="flex items-center gap-2 rounded-lg bg-slate-50 px-2 py-2">
+            <span className="shrink-0 text-xs font-semibold text-slate-500">
+              地圖群
+            </span>
 
-            <p className="text-[10px] font-medium uppercase tracking-wider text-slate-400">
-              Google Maps · 雲端共享
-            </p>
+            <select
+              value={currentGroupId}
+              onChange={(event) => handleChangeGroup(event.target.value)}
+              className="min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-sm font-semibold text-slate-800 outline-none focus:border-orange-400"
+              aria-label="切換地圖群"
+            >
+              {MAP_GROUPS.map((group) => (
+                <option key={group.id} value={group.id}>
+                  {group.name}
+                </option>
+              ))}
+            </select>
           </div>
+
+          <p className="text-[11px] text-slate-400">
+            目前顯示：{currentGroupName}
+          </p>
         </div>
       </header>
 
@@ -289,7 +360,7 @@ export default function Home() {
       {!isLoadingPlaces && activeTab === "settings" && <SettingsView />}
 
       <PlaceFormModal
-        key={`${formMode}-${editingPlace?.id ?? "new"}-${
+        key={`${currentGroupId}-${formMode}-${editingPlace?.id ?? "new"}-${
           isFormOpen ? "open" : "closed"
         }`}
         isOpen={isFormOpen}
