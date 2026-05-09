@@ -29,13 +29,14 @@ type MapGroup = {
   name: string;
 };
 
-const MAP_GROUPS: MapGroup[] = [
+const DEFAULT_GROUPS: MapGroup[] = [
   { id: "family", name: "家庭地圖" },
   { id: "friends", name: "朋友地圖" },
   { id: "personal", name: "我的地圖" },
 ];
 
 const DEFAULT_GROUP_ID = "family";
+const GROUPS_STORAGE_KEY = "map-memory-groups-v1";
 const CURRENT_GROUP_STORAGE_KEY = "map-memory-current-group-v1";
 
 const defaultFilters: PlaceFilters = {
@@ -72,22 +73,84 @@ function normalizePlace(id: string, data: Partial<PlaceItem>): PlaceItem {
   };
 }
 
-function getInitialGroupId() {
+function loadGroups(): MapGroup[] {
+  if (typeof window === "undefined") {
+    return DEFAULT_GROUPS;
+  }
+
+  const raw = window.localStorage.getItem(GROUPS_STORAGE_KEY);
+
+  if (!raw) {
+    window.localStorage.setItem(GROUPS_STORAGE_KEY, JSON.stringify(DEFAULT_GROUPS));
+    return DEFAULT_GROUPS;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as MapGroup[];
+
+    if (!Array.isArray(parsed)) {
+      throw new Error("invalid groups");
+    }
+
+    const validGroups = parsed.filter(
+      (group) =>
+        typeof group.id === "string" &&
+        group.id.trim().length > 0 &&
+        typeof group.name === "string" &&
+        group.name.trim().length > 0
+    );
+
+    if (validGroups.length === 0) {
+      window.localStorage.setItem(GROUPS_STORAGE_KEY, JSON.stringify(DEFAULT_GROUPS));
+      return DEFAULT_GROUPS;
+    }
+
+    const mergedGroups = [...DEFAULT_GROUPS];
+
+    validGroups.forEach((group) => {
+      if (!mergedGroups.some((existingGroup) => existingGroup.id === group.id)) {
+        mergedGroups.push(group);
+      }
+    });
+
+    window.localStorage.setItem(GROUPS_STORAGE_KEY, JSON.stringify(mergedGroups));
+    return mergedGroups;
+  } catch {
+    window.localStorage.setItem(GROUPS_STORAGE_KEY, JSON.stringify(DEFAULT_GROUPS));
+    return DEFAULT_GROUPS;
+  }
+}
+
+function getInitialGroupId(groups: MapGroup[]) {
   if (typeof window === "undefined") {
     return DEFAULT_GROUP_ID;
   }
 
   const savedGroupId = window.localStorage.getItem(CURRENT_GROUP_STORAGE_KEY);
-  const isValidGroup = MAP_GROUPS.some((group) => group.id === savedGroupId);
+  const isValidGroup = groups.some((group) => group.id === savedGroupId);
 
   return isValidGroup && savedGroupId ? savedGroupId : DEFAULT_GROUP_ID;
 }
 
+function createGroupId(groupName: string) {
+  const safeName =
+    groupName
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, "-")
+      .replace(/[^a-z0-9\u4e00-\u9fa5-]/g, "")
+      .slice(0, 20) || "group";
+
+  return `${safeName}-${Date.now()}`;
+}
+
 export default function Home() {
   const [activeTab, setActiveTab] = useState<TabId>("map");
+  const [mapGroups, setMapGroups] = useState<MapGroup[]>(() => loadGroups());
   const [currentGroupId, setCurrentGroupId] = useState(() =>
-    getInitialGroupId()
+    getInitialGroupId(loadGroups())
   );
+  const [newGroupName, setNewGroupName] = useState("");
   const [places, setPlaces] = useState<PlaceItem[]>([]);
   const [selectedPlaceId, setSelectedPlaceId] = useState<string | null>(null);
   const [filters, setFilters] = useState<PlaceFilters>(() => defaultFilters);
@@ -97,12 +160,16 @@ export default function Home() {
   const [isLoadingPlaces, setIsLoadingPlaces] = useState(true);
 
   const currentGroupName =
-    MAP_GROUPS.find((group) => group.id === currentGroupId)?.name ?? "家庭地圖";
+    mapGroups.find((group) => group.id === currentGroupId)?.name ?? "家庭地圖";
 
   const placesCollectionRef = useMemo(
     () => collection(db, "groups", currentGroupId, "places"),
     [currentGroupId]
   );
+
+  useEffect(() => {
+    window.localStorage.setItem(GROUPS_STORAGE_KEY, JSON.stringify(mapGroups));
+  }, [mapGroups]);
 
   useEffect(() => {
     window.localStorage.setItem(CURRENT_GROUP_STORAGE_KEY, currentGroupId);
@@ -194,6 +261,31 @@ export default function Home() {
     setPlaces([]);
     setIsLoadingPlaces(true);
     setCurrentGroupId(groupId);
+  };
+
+  const handleCreateGroup = () => {
+    const trimmedName = newGroupName.trim();
+
+    if (!trimmedName) {
+      window.alert("請輸入地圖群名稱");
+      return;
+    }
+
+    const isDuplicate = mapGroups.some((group) => group.name === trimmedName);
+
+    if (isDuplicate) {
+      window.alert("這個地圖群名稱已經存在");
+      return;
+    }
+
+    const newGroup: MapGroup = {
+      id: createGroupId(trimmedName),
+      name: trimmedName,
+    };
+
+    setMapGroups((prev) => [...prev, newGroup]);
+    setNewGroupName("");
+    handleChangeGroup(newGroup.id);
   };
 
   const handleSubmitForm = async (values: PlaceFormValues) => {
@@ -314,12 +406,34 @@ export default function Home() {
               className="min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-sm font-semibold text-slate-800 outline-none focus:border-orange-400"
               aria-label="切換地圖群"
             >
-              {MAP_GROUPS.map((group) => (
+              {mapGroups.map((group) => (
                 <option key={group.id} value={group.id}>
                   {group.name}
                 </option>
               ))}
             </select>
+          </div>
+
+          <div className="flex items-center gap-2 rounded-lg bg-slate-50 px-2 py-2">
+            <input
+              value={newGroupName}
+              onChange={(event) => setNewGroupName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  handleCreateGroup();
+                }
+              }}
+              placeholder="新增地圖群，例如：大阪旅行"
+              className="min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-sm text-slate-800 outline-none focus:border-orange-400"
+            />
+
+            <button
+              type="button"
+              onClick={handleCreateGroup}
+              className="shrink-0 rounded-md bg-orange-500 px-3 py-1.5 text-sm font-semibold text-white shadow-sm active:scale-95"
+            >
+              新增
+            </button>
           </div>
 
           <p className="text-[11px] text-slate-400">
