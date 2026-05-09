@@ -5,6 +5,8 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDoc,
+  getDocs,
   onSnapshot,
   orderBy,
   query,
@@ -24,20 +26,21 @@ import type { PlaceItem } from "@/lib/places";
 
 type TabId = "map" | "list" | "settings";
 
-type MapGroup = {
+export type MapGroup = {
   id: string;
   name: string;
+  inviteCode?: string;
 };
 
-const DEFAULT_GROUPS: MapGroup[] = [
-  { id: "family", name: "家庭地圖" },
+const FALLBACK_GROUPS: MapGroup[] = [
+  { id: "family", name: "家庭地圖", inviteCode: "FAMILY888" },
   { id: "friends", name: "朋友地圖" },
   { id: "personal", name: "我的地圖" },
 ];
 
 const DEFAULT_GROUP_ID = "family";
-const GROUPS_STORAGE_KEY = "map-memory-groups-v1";
 const CURRENT_GROUP_STORAGE_KEY = "map-memory-current-group-v1";
+const JOINED_GROUPS_STORAGE_KEY = "map-memory-joined-groups-v1";
 
 const defaultFilters: PlaceFilters = {
   keyword: "",
@@ -73,63 +76,49 @@ function normalizePlace(id: string, data: Partial<PlaceItem>): PlaceItem {
   };
 }
 
-function loadGroups(): MapGroup[] {
-  if (typeof window === "undefined") {
-    return DEFAULT_GROUPS;
-  }
-
-  const raw = window.localStorage.getItem(GROUPS_STORAGE_KEY);
-
-  if (!raw) {
-    window.localStorage.setItem(GROUPS_STORAGE_KEY, JSON.stringify(DEFAULT_GROUPS));
-    return DEFAULT_GROUPS;
-  }
-
-  try {
-    const parsed = JSON.parse(raw) as MapGroup[];
-
-    if (!Array.isArray(parsed)) {
-      throw new Error("invalid groups");
-    }
-
-    const validGroups = parsed.filter(
-      (group) =>
-        typeof group.id === "string" &&
-        group.id.trim().length > 0 &&
-        typeof group.name === "string" &&
-        group.name.trim().length > 0
-    );
-
-    if (validGroups.length === 0) {
-      window.localStorage.setItem(GROUPS_STORAGE_KEY, JSON.stringify(DEFAULT_GROUPS));
-      return DEFAULT_GROUPS;
-    }
-
-    const mergedGroups = [...DEFAULT_GROUPS];
-
-    validGroups.forEach((group) => {
-      if (!mergedGroups.some((existingGroup) => existingGroup.id === group.id)) {
-        mergedGroups.push(group);
-      }
-    });
-
-    window.localStorage.setItem(GROUPS_STORAGE_KEY, JSON.stringify(mergedGroups));
-    return mergedGroups;
-  } catch {
-    window.localStorage.setItem(GROUPS_STORAGE_KEY, JSON.stringify(DEFAULT_GROUPS));
-    return DEFAULT_GROUPS;
-  }
-}
-
-function getInitialGroupId(groups: MapGroup[]) {
+function getInitialGroupId() {
   if (typeof window === "undefined") {
     return DEFAULT_GROUP_ID;
   }
 
-  const savedGroupId = window.localStorage.getItem(CURRENT_GROUP_STORAGE_KEY);
-  const isValidGroup = groups.some((group) => group.id === savedGroupId);
+  return (
+    window.localStorage.getItem(CURRENT_GROUP_STORAGE_KEY) ?? DEFAULT_GROUP_ID
+  );
+}
 
-  return isValidGroup && savedGroupId ? savedGroupId : DEFAULT_GROUP_ID;
+function loadJoinedGroupIds() {
+  if (typeof window === "undefined") {
+    return FALLBACK_GROUPS.map((group) => group.id);
+  }
+
+  const raw = window.localStorage.getItem(JOINED_GROUPS_STORAGE_KEY);
+
+  if (!raw) {
+    const fallbackIds = FALLBACK_GROUPS.map((group) => group.id);
+    window.localStorage.setItem(
+      JOINED_GROUPS_STORAGE_KEY,
+      JSON.stringify(fallbackIds)
+    );
+    return fallbackIds;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as string[];
+
+    if (!Array.isArray(parsed)) {
+      throw new Error("invalid joined groups");
+    }
+
+    const validIds = parsed.filter(
+      (groupId) => typeof groupId === "string" && groupId.trim().length > 0
+    );
+
+    return validIds.length > 0
+      ? validIds
+      : FALLBACK_GROUPS.map((group) => group.id);
+  } catch {
+    return FALLBACK_GROUPS.map((group) => group.id);
+  }
 }
 
 function createGroupId(groupName: string) {
@@ -144,13 +133,58 @@ function createGroupId(groupName: string) {
   return `${safeName}-${Date.now()}`;
 }
 
+function createInviteCode() {
+  const characters = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let code = "";
+
+  for (let index = 0; index < 6; index += 1) {
+    code += characters[Math.floor(Math.random() * characters.length)];
+  }
+
+  return code;
+}
+
+function mergeGroups(firebaseGroups: MapGroup[]) {
+  const mergedGroups = [...FALLBACK_GROUPS];
+
+  firebaseGroups.forEach((group) => {
+    const existingIndex = mergedGroups.findIndex(
+      (existingGroup) => existingGroup.id === group.id
+    );
+
+    if (existingIndex >= 0) {
+      mergedGroups[existingIndex] = {
+        ...mergedGroups[existingIndex],
+        ...group,
+      };
+    } else {
+      mergedGroups.push(group);
+    }
+  });
+
+  return mergedGroups;
+}
+
+function getVisibleGroups(allGroups: MapGroup[], joinedGroupIds: string[]) {
+  const joinedSet = new Set(joinedGroupIds);
+  return allGroups.filter((group) => joinedSet.has(group.id));
+}
+
 export default function Home() {
   const [activeTab, setActiveTab] = useState<TabId>("map");
-  const [mapGroups, setMapGroups] = useState<MapGroup[]>(() => loadGroups());
+  const [allGroups, setAllGroups] = useState<MapGroup[]>(FALLBACK_GROUPS);
+  const [joinedGroupIds, setJoinedGroupIds] = useState<string[]>(() =>
+    loadJoinedGroupIds()
+  );
   const [currentGroupId, setCurrentGroupId] = useState(() =>
-    getInitialGroupId(loadGroups())
+    getInitialGroupId()
   );
   const [newGroupName, setNewGroupName] = useState("");
+  const [joinInviteCode, setJoinInviteCode] = useState("");
+  const [isCreatingGroup, setIsCreatingGroup] = useState(false);
+  const [isJoiningGroup, setIsJoiningGroup] = useState(false);
+  const [isLeavingGroup, setIsLeavingGroup] = useState(false);
+  const [isDeletingGroup, setIsDeletingGroup] = useState(false);
   const [places, setPlaces] = useState<PlaceItem[]>([]);
   const [selectedPlaceId, setSelectedPlaceId] = useState<string | null>(null);
   const [filters, setFilters] = useState<PlaceFilters>(() => defaultFilters);
@@ -159,21 +193,91 @@ export default function Home() {
   const [editingPlace, setEditingPlace] = useState<PlaceItem | null>(null);
   const [isLoadingPlaces, setIsLoadingPlaces] = useState(true);
 
-  const currentGroupName =
-    mapGroups.find((group) => group.id === currentGroupId)?.name ?? "家庭地圖";
-
-  const placesCollectionRef = useMemo(
-    () => collection(db, "groups", currentGroupId, "places"),
-    [currentGroupId]
+  const mapGroups = useMemo(
+    () => getVisibleGroups(allGroups, joinedGroupIds),
+    [allGroups, joinedGroupIds]
   );
 
-  useEffect(() => {
-    window.localStorage.setItem(GROUPS_STORAGE_KEY, JSON.stringify(mapGroups));
-  }, [mapGroups]);
+  const safeCurrentGroupId =
+  mapGroups.some((group) => group.id === currentGroupId) ||
+  mapGroups.length === 0
+    ? currentGroupId
+    : mapGroups[0].id;
+
+const currentGroup =
+  mapGroups.find((group) => group.id === safeCurrentGroupId) ??
+  mapGroups[0];
+
+const currentGroupName = currentGroup?.name ?? "尚未選擇地圖群";
+
+const currentInviteCode = currentGroup?.inviteCode ?? "";
+
+const groupsCollectionRef = useMemo(() => collection(db, "groups"), []);
+
+const placesCollectionRef = useMemo(
+  () => collection(db, "groups", safeCurrentGroupId, "places"),
+  [safeCurrentGroupId]
+);
 
   useEffect(() => {
     window.localStorage.setItem(CURRENT_GROUP_STORAGE_KEY, currentGroupId);
   }, [currentGroupId]);
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      JOINED_GROUPS_STORAGE_KEY,
+      JSON.stringify(joinedGroupIds)
+    );
+  }, [joinedGroupIds]);
+
+  useEffect(() => {
+    const unsubscribe = onSnapshot(groupsCollectionRef, async (snapshot) => {
+      const firebaseGroups: MapGroup[] = [];
+
+      for (const documentSnapshot of snapshot.docs) {
+        try {
+          const metaRef = doc(
+            db,
+            "groups",
+            documentSnapshot.id,
+            "info",
+            "meta"
+          );
+
+          const metaSnapshot = await getDoc(metaRef);
+
+          if (metaSnapshot.exists()) {
+            const data = metaSnapshot.data();
+
+            firebaseGroups.push({
+              id: documentSnapshot.id,
+              name:
+                typeof data.name === "string"
+                  ? data.name
+                  : documentSnapshot.id,
+              inviteCode:
+                typeof data.inviteCode === "string"
+                  ? data.inviteCode
+                  : undefined,
+            });
+          } else {
+            firebaseGroups.push({
+              id: documentSnapshot.id,
+              name: documentSnapshot.id,
+            });
+          }
+        } catch (error) {
+          console.error(error);
+        }
+      }
+
+      const nextGroups = mergeGroups(firebaseGroups);
+      setAllGroups(nextGroups);
+    });
+
+    return () => unsubscribe();
+  }, [groupsCollectionRef]);
+
 
   useEffect(() => {
     const placesQuery = query(placesCollectionRef, orderBy("updatedAt", "desc"));
@@ -263,7 +367,7 @@ export default function Home() {
     setCurrentGroupId(groupId);
   };
 
-  const handleCreateGroup = () => {
+  const handleCreateGroup = async () => {
     const trimmedName = newGroupName.trim();
 
     if (!trimmedName) {
@@ -271,21 +375,200 @@ export default function Home() {
       return;
     }
 
-    const isDuplicate = mapGroups.some((group) => group.name === trimmedName);
+    const isDuplicate = allGroups.some((group) => group.name === trimmedName);
 
     if (isDuplicate) {
       window.alert("這個地圖群名稱已經存在");
       return;
     }
 
+    setIsCreatingGroup(true);
+
     const newGroup: MapGroup = {
       id: createGroupId(trimmedName),
       name: trimmedName,
+      inviteCode: createInviteCode(),
     };
 
-    setMapGroups((prev) => [...prev, newGroup]);
-    setNewGroupName("");
-    handleChangeGroup(newGroup.id);
+    try {
+      await setDoc(doc(db, "groups", newGroup.id), {
+        createdAt: new Date().toISOString(),
+      });
+
+      await setDoc(doc(db, "groups", newGroup.id, "info", "meta"), {
+        name: newGroup.name,
+        inviteCode: newGroup.inviteCode,
+        createdAt: new Date().toISOString(),
+      });
+
+      setAllGroups((prev) => mergeGroups([...prev, newGroup]));
+      setJoinedGroupIds((prev) => Array.from(new Set([...prev, newGroup.id])));
+      setNewGroupName("");
+      handleChangeGroup(newGroup.id);
+    } catch (error) {
+      console.error(error);
+      window.alert("建立地圖群失敗，請稍後再試");
+    } finally {
+      setIsCreatingGroup(false);
+    }
+  };
+
+  const handleJoinGroup = async () => {
+    const normalizedInviteCode = joinInviteCode.trim().toUpperCase();
+
+    if (!normalizedInviteCode) {
+      window.alert("請輸入邀請碼");
+      return;
+    }
+
+    setIsJoiningGroup(true);
+
+    try {
+      const groupsSnapshot = await getDocs(collection(db, "groups"));
+      let matchedGroup: MapGroup | null = null;
+
+      for (const groupDocument of groupsSnapshot.docs) {
+        const metaSnapshot = await getDoc(
+          doc(db, "groups", groupDocument.id, "info", "meta")
+        );
+
+        if (!metaSnapshot.exists()) {
+          continue;
+        }
+
+        const data = metaSnapshot.data();
+        const inviteCode =
+          typeof data.inviteCode === "string"
+            ? data.inviteCode.toUpperCase()
+            : "";
+
+        if (inviteCode === normalizedInviteCode) {
+          matchedGroup = {
+            id: groupDocument.id,
+            name:
+              typeof data.name === "string" ? data.name : groupDocument.id,
+            inviteCode: typeof data.inviteCode === "string" ? data.inviteCode : "",
+          };
+          break;
+        }
+      }
+
+      if (!matchedGroup) {
+        window.alert("找不到這個邀請碼，請確認是否輸入正確");
+        return;
+      }
+
+      setAllGroups((prev) => mergeGroups([...prev, matchedGroup]));
+      setJoinedGroupIds((prev) =>
+        Array.from(new Set([...prev, matchedGroup.id]))
+      );
+      setJoinInviteCode("");
+      handleChangeGroup(matchedGroup.id);
+    } catch (error) {
+      console.error(error);
+      window.alert("加入地圖群失敗，請稍後再試");
+    } finally {
+      setIsJoiningGroup(false);
+    }
+  };
+
+  const handleLeaveCurrentGroup = () => {
+    if (!currentGroup) {
+      return;
+    }
+
+    if (joinedGroupIds.length <= 1) {
+      window.alert("至少需要保留一個地圖群");
+      return;
+    }
+
+    const confirmLeave = window.confirm(
+      `確定要退出「${currentGroupName}」嗎？\n\n退出後不會刪除地點資料，只是不再顯示這個地圖群。`
+    );
+
+    if (!confirmLeave) {
+      return;
+    }
+
+    setIsLeavingGroup(true);
+
+    const nextJoinedGroupIds = joinedGroupIds.filter(
+      (groupId) => groupId !== currentGroup.id
+    );
+
+    setJoinedGroupIds(nextJoinedGroupIds);
+
+    const nextGroup = allGroups.find((group) =>
+      nextJoinedGroupIds.includes(group.id)
+    );
+
+    if (nextGroup) {
+      handleChangeGroup(nextGroup.id);
+    }
+
+    setIsLeavingGroup(false);
+  };
+
+  const handleDeleteCurrentGroup = async () => {
+    if (!currentGroup) {
+      return;
+    }
+
+    const confirmDelete = window.confirm(
+      `確定要刪除「${currentGroupName}」嗎？\n\n這會刪除這個地圖群的主資料與所有地點資料，無法復原。`
+    );
+
+    if (!confirmDelete) {
+      return;
+    }
+
+    const secondConfirmDelete = window.confirm(
+      `再次確認：真的要永久刪除「${currentGroupName}」嗎？`
+    );
+
+    if (!secondConfirmDelete) {
+      return;
+    }
+
+    setIsDeletingGroup(true);
+
+    try {
+      const placesSnapshot = await getDocs(
+        collection(db, "groups", currentGroup.id, "places")
+      );
+
+      await Promise.all(
+        placesSnapshot.docs.map((placeDocument) =>
+          deleteDoc(doc(db, "groups", currentGroup.id, "places", placeDocument.id))
+        )
+      );
+
+      await deleteDoc(doc(db, "groups", currentGroup.id, "info", "meta"));
+      await deleteDoc(doc(db, "groups", currentGroup.id));
+
+      const nextJoinedGroupIds = joinedGroupIds.filter(
+        (groupId) => groupId !== currentGroup.id
+      );
+
+      setJoinedGroupIds(nextJoinedGroupIds);
+      setAllGroups((prev) =>
+        prev.filter((group) => group.id !== currentGroup.id)
+      );
+
+      const nextGroup = allGroups.find(
+        (group) =>
+          group.id !== currentGroup.id && nextJoinedGroupIds.includes(group.id)
+      );
+
+      if (nextGroup) {
+        handleChangeGroup(nextGroup.id);
+      }
+    } catch (error) {
+      console.error(error);
+      window.alert("刪除地圖群失敗，請稍後再試");
+    } finally {
+      setIsDeletingGroup(false);
+    }
   };
 
   const handleSubmitForm = async (values: PlaceFormValues) => {
@@ -414,31 +697,10 @@ export default function Home() {
             </select>
           </div>
 
-          <div className="flex items-center gap-2 rounded-lg bg-slate-50 px-2 py-2">
-            <input
-              value={newGroupName}
-              onChange={(event) => setNewGroupName(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  handleCreateGroup();
-                }
-              }}
-              placeholder="新增地圖群，例如：大阪旅行"
-              className="min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-sm text-slate-800 outline-none focus:border-orange-400"
-            />
-
-            <button
-              type="button"
-              onClick={handleCreateGroup}
-              className="shrink-0 rounded-md bg-orange-500 px-3 py-1.5 text-sm font-semibold text-white shadow-sm active:scale-95"
-            >
-              新增
-            </button>
+          <div className="rounded-lg bg-orange-50 px-2 py-1.5 text-[11px] text-orange-700">
+            <div>目前顯示：{currentGroupName}</div>
+            {currentInviteCode ? <div>邀請碼：{currentInviteCode}</div> : null}
           </div>
-
-          <p className="text-[11px] text-slate-400">
-            目前顯示：{currentGroupName}
-          </p>
         </div>
       </header>
 
@@ -471,7 +733,24 @@ export default function Home() {
         />
       )}
 
-      {!isLoadingPlaces && activeTab === "settings" && <SettingsView />}
+      {!isLoadingPlaces && activeTab === "settings" && (
+        <SettingsView
+          currentGroupName={currentGroupName}
+          currentInviteCode={currentInviteCode}
+          newGroupName={newGroupName}
+          joinInviteCode={joinInviteCode}
+          isCreatingGroup={isCreatingGroup}
+          isJoiningGroup={isJoiningGroup}
+          isLeavingGroup={isLeavingGroup}
+          isDeletingGroup={isDeletingGroup}
+          onNewGroupNameChange={setNewGroupName}
+          onJoinInviteCodeChange={setJoinInviteCode}
+          onCreateGroup={handleCreateGroup}
+          onJoinGroup={handleJoinGroup}
+          onLeaveGroup={handleLeaveCurrentGroup}
+          onDeleteGroup={handleDeleteCurrentGroup}
+        />
+      )}
 
       <PlaceFormModal
         key={`${currentGroupId}-${formMode}-${editingPlace?.id ?? "new"}-${
