@@ -1,6 +1,16 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import {
+  collection,
+  deleteDoc,
+  doc,
+  onSnapshot,
+  orderBy,
+  query,
+  setDoc,
+  updateDoc,
+} from "firebase/firestore";
 import { BottomNav } from "@/components/BottomNav";
 import { MapView } from "@/components/MapView";
 import {
@@ -9,11 +19,12 @@ import {
 } from "@/components/PlaceFormModal";
 import { PlaceListView, type PlaceFilters } from "@/components/PlaceListView";
 import { SettingsView } from "@/components/SettingsView";
-import { defaultPlacesSeed, type PlaceItem } from "@/lib/places";
+import { db } from "@/lib/firebase";
+import type { PlaceItem } from "@/lib/places";
 
 type TabId = "map" | "list" | "settings";
 
-const STORAGE_KEY = "map-memory-places-v1";
+const GROUP_ID = "family";
 
 const defaultFilters: PlaceFilters = {
   keyword: "",
@@ -22,38 +33,6 @@ const defaultFilters: PlaceFilters = {
   tags: [],
 };
 
-function loadInitialPlaces(): PlaceItem[] {
-  if (typeof window === "undefined") {
-    return defaultPlacesSeed;
-  }
-
-  const raw = window.localStorage.getItem(STORAGE_KEY);
-
-  if (!raw) {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(defaultPlacesSeed));
-    return defaultPlacesSeed;
-  }
-
-  try {
-    const parsed = JSON.parse(raw) as PlaceItem[];
-
-    if (!Array.isArray(parsed)) {
-      throw new Error("invalid places");
-    }
-
-    return parsed.map((place) => ({
-      ...place,
-      photos: Array.isArray(place.photos) ? place.photos : [],
-      tags: Array.isArray(place.tags) ? place.tags : [],
-      coverPhotoIndex: place.coverPhotoIndex ?? 0,
-      completedDate: place.completedDate ?? "",
-    }));
-  } catch {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(defaultPlacesSeed));
-    return defaultPlacesSeed;
-  }
-}
-
 function normalizeTags(tagsText: string) {
   return tagsText
     .split(",")
@@ -61,18 +40,63 @@ function normalizeTags(tagsText: string) {
     .filter(Boolean);
 }
 
+function normalizePlace(id: string, data: Partial<PlaceItem>): PlaceItem {
+  return {
+    id,
+    name: data.name ?? "",
+    status: data.status ?? "wantToGo",
+    address: data.address ?? "",
+    rating: data.rating ?? 0,
+    photos: Array.isArray(data.photos) ? data.photos : [],
+    coverPhotoIndex: data.coverPhotoIndex ?? 0,
+    completedDate: data.completedDate ?? "",
+    tags: Array.isArray(data.tags) ? data.tags : [],
+    navigationTarget: data.navigationTarget ?? "",
+    notes: data.notes ?? "",
+    lat: data.lat,
+    lng: data.lng,
+    createdAt: data.createdAt ?? new Date().toISOString(),
+    updatedAt: data.updatedAt ?? new Date().toISOString(),
+  };
+}
+
 export default function Home() {
   const [activeTab, setActiveTab] = useState<TabId>("map");
-  const [places, setPlaces] = useState<PlaceItem[]>(() => loadInitialPlaces());
+  const [places, setPlaces] = useState<PlaceItem[]>([]);
   const [selectedPlaceId, setSelectedPlaceId] = useState<string | null>(null);
   const [filters, setFilters] = useState<PlaceFilters>(() => defaultFilters);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [formMode, setFormMode] = useState<"create" | "edit">("create");
   const [editingPlace, setEditingPlace] = useState<PlaceItem | null>(null);
+  const [isLoadingPlaces, setIsLoadingPlaces] = useState(true);
+
+  const placesCollectionRef = useMemo(
+    () => collection(db, "groups", GROUP_ID, "places"),
+    []
+  );
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(places));
-  }, [places]);
+    const placesQuery = query(placesCollectionRef, orderBy("updatedAt", "desc"));
+
+    const unsubscribe = onSnapshot(
+      placesQuery,
+      (snapshot) => {
+        const nextPlaces = snapshot.docs.map((document) =>
+          normalizePlace(document.id, document.data() as Partial<PlaceItem>)
+        );
+
+        setPlaces(nextPlaces);
+        setIsLoadingPlaces(false);
+      },
+      (error) => {
+        console.error(error);
+        window.alert("讀取雲端地點失敗，請確認 Firebase 規則是否為測試模式");
+        setIsLoadingPlaces(false);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [placesCollectionRef]);
 
   const availableTags = useMemo(() => {
     const uniqueTags = new Set<string>();
@@ -125,60 +149,80 @@ export default function Home() {
     setIsFormOpen(true);
   };
 
-  const handleSubmitForm = (values: PlaceFormValues) => {
-    const now = new Date().toISOString();
-
-    if (formMode === "create") {
-      const newPlace: PlaceItem = {
-        id: `p-${Date.now()}`,
-        name: values.name.trim(),
-        status: values.status,
-        address: values.address.trim(),
-        rating: values.rating,
-        photos: values.photos.slice(0, 5),
-        coverPhotoIndex: values.coverPhotoIndex ?? 0,
-        completedDate: values.status === "visited" ? values.completedDate : "",
-        tags: normalizeTags(values.tagsText),
-        navigationTarget: values.navigationTarget.trim(),
-        notes: values.notes.trim(),
-        lat: values.lat ?? 25.052013567893294,
-        lng: values.lng ?? 121.36444898053523,
-        createdAt: now,
-        updatedAt: now,
-      };
-
-      setPlaces((prev) => [newPlace, ...prev]);
-      setSelectedPlaceId(newPlace.id);
-    } else if (editingPlace) {
-      setPlaces((prev) =>
-        prev.map((place) =>
-          place.id === editingPlace.id
-            ? {
-                ...place,
-                name: values.name.trim(),
-                status: values.status,
-                address: values.address.trim(),
-                rating: values.rating,
-                photos: values.photos.slice(0, 5),
-                coverPhotoIndex: values.coverPhotoIndex ?? 0,
-                completedDate:
-                  values.status === "visited" ? values.completedDate : "",
-                tags: normalizeTags(values.tagsText),
-                navigationTarget: values.navigationTarget.trim(),
-                notes: values.notes.trim(),
-                updatedAt: now,
-              }
-            : place
-        )
-      );
-    }
-
+  const closeForm = () => {
     setIsFormOpen(false);
+    setEditingPlace(null);
   };
 
-  const handleDeletePlace = (placeId: string) => {
-    setPlaces((prev) => prev.filter((place) => place.id !== placeId));
-    setSelectedPlaceId((prev) => (prev === placeId ? null : prev));
+  const handleSubmitForm = async (values: PlaceFormValues) => {
+    const now = new Date().toISOString();
+
+    try {
+      if (formMode === "create") {
+        const placeId = `p-${Date.now()}`;
+
+        const newPlace: PlaceItem = {
+          id: placeId,
+          name: values.name.trim(),
+          status: values.status,
+          address: values.address.trim(),
+          rating: values.rating,
+          photos: values.photos.slice(0, 5),
+          coverPhotoIndex: values.coverPhotoIndex ?? 0,
+          completedDate:
+            values.status === "visited" ? values.completedDate : "",
+          tags: normalizeTags(values.tagsText),
+          navigationTarget: values.navigationTarget.trim(),
+          notes: values.notes.trim(),
+          lat: values.lat ?? 25.052013567893294,
+          lng: values.lng ?? 121.36444898053523,
+          createdAt: now,
+          updatedAt: now,
+        };
+
+        await setDoc(doc(db, "groups", GROUP_ID, "places", placeId), newPlace);
+        setSelectedPlaceId(placeId);
+      } else if (editingPlace) {
+        const updatedPlace: Partial<PlaceItem> = {
+          name: values.name.trim(),
+          status: values.status,
+          address: values.address.trim(),
+          rating: values.rating,
+          photos: values.photos.slice(0, 5),
+          coverPhotoIndex: values.coverPhotoIndex ?? 0,
+          completedDate:
+            values.status === "visited" ? values.completedDate : "",
+          tags: normalizeTags(values.tagsText),
+          navigationTarget: values.navigationTarget.trim(),
+          notes: values.notes.trim(),
+          lat: values.lat ?? editingPlace.lat,
+          lng: values.lng ?? editingPlace.lng,
+          updatedAt: now,
+        };
+
+        await updateDoc(
+          doc(db, "groups", GROUP_ID, "places", editingPlace.id),
+          updatedPlace
+        );
+
+        setSelectedPlaceId(editingPlace.id);
+      }
+
+      closeForm();
+    } catch (error) {
+      console.error(error);
+      window.alert("儲存地點失敗，請確認 Firebase Firestore 規則是否為測試模式");
+    }
+  };
+
+  const handleDeletePlace = async (placeId: string) => {
+    try {
+      await deleteDoc(doc(db, "groups", GROUP_ID, "places", placeId));
+      setSelectedPlaceId((prev) => (prev === placeId ? null : prev));
+    } catch (error) {
+      console.error(error);
+      window.alert("刪除地點失敗，請稍後再試");
+    }
   };
 
   return (
@@ -207,13 +251,19 @@ export default function Home() {
             </h1>
 
             <p className="text-[10px] font-medium uppercase tracking-wider text-slate-400">
-              Google Maps · 本地資料
+              Google Maps · 雲端共享
             </p>
           </div>
         </div>
       </header>
 
-      {activeTab === "map" && (
+      {isLoadingPlaces ? (
+        <div className="flex flex-1 items-center justify-center p-6 text-sm text-slate-500">
+          雲端地點載入中...
+        </div>
+      ) : null}
+
+      {!isLoadingPlaces && activeTab === "map" && (
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <MapView
             places={places}
@@ -225,7 +275,7 @@ export default function Home() {
         </div>
       )}
 
-      {activeTab === "list" && (
+      {!isLoadingPlaces && activeTab === "list" && (
         <PlaceListView
           places={filteredPlaces}
           filters={filters}
@@ -236,7 +286,7 @@ export default function Home() {
         />
       )}
 
-      {activeTab === "settings" && <SettingsView />}
+      {!isLoadingPlaces && activeTab === "settings" && <SettingsView />}
 
       <PlaceFormModal
         key={`${formMode}-${editingPlace?.id ?? "new"}-${
@@ -246,7 +296,7 @@ export default function Home() {
         mode={formMode}
         initialPlace={editingPlace}
         availableTags={availableTags}
-        onClose={() => setIsFormOpen(false)}
+        onClose={closeForm}
         onSubmit={handleSubmitForm}
       />
 

@@ -2,6 +2,8 @@
 
 import { useMemo, useRef, useState } from "react";
 import { Autocomplete, useJsApiLoader } from "@react-google-maps/api";
+import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { storage } from "@/lib/firebase";
 import {
   RATING_OPTIONS,
   STATUS_OPTIONS,
@@ -32,13 +34,18 @@ type PlaceFormModalProps = {
   initialPlace: PlaceItem | null;
   availableTags?: string[];
   onClose: () => void;
-  onSubmit: (values: PlaceFormValues) => void;
+  onSubmit: (values: PlaceFormValues) => void | Promise<void>;
 };
 
 type PhotoPreviewState = {
   photos: string[];
   index: number;
 } | null;
+
+const inputClassName =
+  "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 opacity-100 placeholder:text-slate-500";
+
+const labelTitleClassName = "mb-1 block font-semibold text-slate-800";
 
 function todayText() {
   return new Date().toISOString().slice(0, 10);
@@ -97,8 +104,8 @@ export function PlaceFormModal({
   );
 
   const [newTagText, setNewTagText] = useState("");
-
   const [errors, setErrors] = useState<{ name?: string; address?: string }>({});
+  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
 
   const title = useMemo(
     () => (mode === "create" ? "新增地點" : "編輯地點"),
@@ -146,20 +153,12 @@ export function PlaceFormModal({
 
     setFormValues((prev) => ({
       ...prev,
-
-      // 地點名稱：不覆蓋
       name: prev.name,
-
-      // 地址：不覆蓋手動輸入內容
       address: prev.address,
-
-      // 導航目標：只顯示 Google 地點標題
       navigationTarget:
-      place.name
-      ?.replace(/[^\u4e00-\u9fa5（）()、・．.－\-\s]/g, "")
-      .trim() || place.name || prev.navigationTarget,
-
-      // 地址選擇只用來取得正確地標位置
+        place.name
+          ?.replace(/[^\u4e00-\u9fa5（）()、・．.－\-\s]/g, "")
+          .trim() || place.name || prev.navigationTarget,
       lat,
       lng,
     }));
@@ -175,22 +174,14 @@ export function PlaceFormModal({
 
     setFormValues((prev) => ({
       ...prev,
-
-      // 地點名稱：不覆蓋
       name: prev.name,
-
-      // 地址：不覆蓋
       address: prev.address,
-
-      // 經緯度：不改，避免導航目標影響地標位置
       lat: prev.lat,
       lng: prev.lng,
-
-      // 導航目標：只顯示 Google 地點標題
       navigationTarget:
-      place.name
-      ?.replace(/[^\u4e00-\u9fa5（）()、・．.－\-\s]/g, "")
-      .trim() || place.name || prev.navigationTarget,
+        place.name
+          ?.replace(/[^\u4e00-\u9fa5（）()、・．.－\-\s]/g, "")
+          .trim() || place.name || prev.navigationTarget,
     }));
   };
 
@@ -224,7 +215,7 @@ export function PlaceFormModal({
     setNewTagText("");
   };
 
-  const handleValidateAndSubmit = () => {
+  const handleValidateAndSubmit = async () => {
     const nextErrors: { name?: string; address?: string } = {};
 
     if (!formValues.name.trim()) {
@@ -239,6 +230,11 @@ export function PlaceFormModal({
 
     if (Object.keys(nextErrors).length > 0) return;
 
+    if (isUploadingPhoto) {
+      window.alert("照片上傳中，請稍候");
+      return;
+    }
+
     const safeCoverPhotoIndex =
       formValues.photos.length === 0
         ? 0
@@ -247,7 +243,7 @@ export function PlaceFormModal({
             formValues.photos.length - 1
           );
 
-    onSubmit({
+    await onSubmit({
       ...formValues,
       coverPhotoIndex: safeCoverPhotoIndex,
       completedDate:
@@ -267,31 +263,46 @@ export function PlaceFormModal({
 
     const selectedFiles = Array.from(files).slice(0, remain);
 
-    const base64Photos = await Promise.all(
-      selectedFiles.map(
-        (file) =>
-          new Promise<string>((resolve, reject) => {
-            const reader = new FileReader();
+    setIsUploadingPhoto(true);
 
-            reader.onload = () => resolve(String(reader.result ?? ""));
-            reader.onerror = () => reject(new Error("read photo failed"));
-            reader.readAsDataURL(file);
-          })
-      )
-    );
+    try {
+      const uploadedUrls = await Promise.all(
+        selectedFiles.map(async (file) => {
+          const safeFileName = file.name.replace(/[^\w.\-]/g, "_");
 
-    setFormValues((prev) => {
-      const nextPhotos = [...prev.photos, ...base64Photos].slice(0, 5);
+          const fileName = `${Date.now()}-${Math.random()
+            .toString(36)
+            .slice(2)}-${safeFileName}`;
 
-      return {
-        ...prev,
-        photos: nextPhotos,
-        coverPhotoIndex:
-          prev.photos.length === 0 && nextPhotos.length > 0
-            ? 0
-            : Math.min(prev.coverPhotoIndex, Math.max(0, nextPhotos.length - 1)),
-      };
-    });
+          const storageRef = ref(storage, `places/${fileName}`);
+
+          await uploadBytes(storageRef, file);
+
+          return await getDownloadURL(storageRef);
+        })
+      );
+
+      setFormValues((prev) => {
+        const nextPhotos = [...prev.photos, ...uploadedUrls].slice(0, 5);
+
+        return {
+          ...prev,
+          photos: nextPhotos,
+          coverPhotoIndex:
+            prev.photos.length === 0 && nextPhotos.length > 0
+              ? 0
+              : Math.min(
+                  prev.coverPhotoIndex,
+                  Math.max(0, nextPhotos.length - 1)
+                ),
+        };
+      });
+    } catch (error) {
+      console.error(error);
+      window.alert("照片上傳失敗，請稍後再試");
+    } finally {
+      setIsUploadingPhoto(false);
+    }
   };
 
   const handleDeletePhoto = (index: number) => {
@@ -344,43 +355,41 @@ export function PlaceFormModal({
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/50 p-3">
       <div className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-4 shadow-2xl">
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-lg font-bold text-slate-900">
-          {title}
-          </h2>
+          <h2 className="text-lg font-bold text-slate-900">{title}</h2>
 
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md px-2 py-1 text-sm text-slate-500"
+            className="rounded-md px-2 py-1 text-sm font-semibold text-slate-700"
           >
             關閉
           </button>
         </div>
 
-        <div className="space-y-3">
+        <div className="space-y-3 text-slate-800">
           <label className="block text-sm">
-            <span className="mb-1 block font-medium">
+            <span className={labelTitleClassName}>
               地點名稱
-              <span className="ml-1 text-red-500">(必填)</span>
+              <span className="ml-1 font-bold text-red-500">(必填)</span>
             </span>
 
             <input
               value={formValues.name}
               onChange={(event) => handleChange("name", event.target.value)}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2"
+              className={inputClassName}
             />
 
             {errors.name ? (
-              <span className="mt-1 block text-xs text-rose-600">
+              <span className="mt-1 block text-xs font-semibold text-rose-600">
                 {errors.name}
               </span>
             ) : null}
           </label>
 
           <label className="block text-sm">
-            <span className="mb-1 block font-medium">
+            <span className={labelTitleClassName}>
               狀態
-              <span className="ml-1 text-red-500">(必填)</span>
+              <span className="ml-1 font-bold text-red-500">(必填)</span>
             </span>
 
             <select
@@ -388,7 +397,7 @@ export function PlaceFormModal({
               onChange={(event) =>
                 handleStatusChange(event.target.value as PlaceStatus)
               }
-              className="w-full rounded-lg border border-slate-300 px-3 py-2"
+              className={inputClassName}
             >
               {STATUS_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>
@@ -400,7 +409,7 @@ export function PlaceFormModal({
 
           {formValues.status === "visited" ? (
             <label className="block text-sm">
-              <span className="mb-1 block font-medium">完成日期</span>
+              <span className={labelTitleClassName}>完成日期</span>
 
               <input
                 type="date"
@@ -408,15 +417,15 @@ export function PlaceFormModal({
                 onChange={(event) =>
                   handleChange("completedDate", event.target.value)
                 }
-                className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                className={inputClassName}
               />
             </label>
           ) : null}
 
           <label className="block text-sm">
-            <span className="mb-1 block font-medium">
+            <span className={labelTitleClassName}>
               地址
-              <span className="ml-1 text-red-500">(必填)</span>
+              <span className="ml-1 font-bold text-red-500">(必填)</span>
             </span>
 
             {isLoaded ? (
@@ -436,7 +445,7 @@ export function PlaceFormModal({
                     handleChange("address", event.target.value)
                   }
                   placeholder="輸入地址或地標，例如：淡水漁人碼頭"
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                  className={inputClassName}
                 />
               </Autocomplete>
             ) : (
@@ -446,37 +455,37 @@ export function PlaceFormModal({
                   handleChange("address", event.target.value)
                 }
                 placeholder="輸入地址或地標，例如：淡水漁人碼頭"
-                className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                className={inputClassName}
               />
             )}
 
             {errors.address ? (
-              <span className="mt-1 block text-xs text-rose-600">
+              <span className="mt-1 block text-xs font-semibold text-rose-600">
                 {errors.address}
               </span>
             ) : null}
 
             {formValues.lat && formValues.lng ? (
-              <span className="mt-1 block text-[11px] text-slate-400">
+              <span className="mt-1 block text-[11px] font-medium text-slate-600">
                 已取得位置：{formValues.lat.toFixed(5)},{" "}
                 {formValues.lng.toFixed(5)}
               </span>
             ) : (
-              <span className="mt-1 block text-[11px] text-orange-500">
+              <span className="mt-1 block text-[11px] font-bold text-amber-600">
                 請從搜尋建議中選擇地點，才能取得正確地標位置
               </span>
             )}
           </label>
 
           <label className="block text-sm">
-            <span className="mb-1 block font-medium">喜歡程度（0~5）</span>
+            <span className={labelTitleClassName}>喜歡程度（0~5）</span>
 
             <select
               value={formValues.rating}
               onChange={(event) =>
                 handleChange("rating", Number(event.target.value))
               }
-              className="w-full rounded-lg border border-slate-300 px-3 py-2"
+              className={inputClassName}
             >
               {RATING_OPTIONS.map((option) => (
                 <option key={option} value={option}>
@@ -487,12 +496,13 @@ export function PlaceFormModal({
           </label>
 
           <div className="block text-sm">
-            <span className="mb-1 block font-medium">地點照片（最多 5 張）</span>
+            <span className={labelTitleClassName}>地點照片（最多 5 張）</span>
 
             <input
               type="file"
               accept="image/*"
               multiple
+              disabled={isUploadingPhoto}
               onChange={(event) => {
                 handlePhotoUpload(event.target.files).catch(() => {
                   window.alert("照片讀取失敗，請重新上傳");
@@ -500,11 +510,13 @@ export function PlaceFormModal({
 
                 event.target.value = "";
               }}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-900 opacity-100 file:mr-3 file:rounded-md file:border-0 file:bg-slate-900 file:px-3 file:py-1.5 file:text-sm file:font-semibold file:text-white disabled:opacity-70"
             />
 
-            <p className="mt-1 text-xs text-slate-500">
-              已上傳 {formValues.photos.length}/5
+            <p className="mt-1 text-xs font-medium text-slate-600">
+              {isUploadingPhoto
+                ? "照片上傳中..."
+                : `已上傳 ${formValues.photos.length}/5`}
             </p>
 
             {formValues.photos.length > 0 ? (
@@ -560,7 +572,7 @@ export function PlaceFormModal({
                         className={`w-full px-2 py-1.5 text-[11px] font-semibold ${
                           isCover
                             ? "bg-orange-500 text-white"
-                            : "bg-white text-slate-600"
+                            : "bg-white text-slate-700"
                         }`}
                       >
                         {isCover ? "目前封面" : "設為封面"}
@@ -572,11 +584,13 @@ export function PlaceFormModal({
             ) : null}
           </div>
 
-          <div className="rounded-xl border border-slate-200 bg-white p-3">
+          <div className="rounded-xl border border-slate-200 bg-white p-3 text-slate-800">
             <div className="mb-2 flex items-center justify-between">
-              <span className="text-sm font-medium">標籤（可複選）</span>
+              <span className="text-sm font-semibold text-slate-800">
+                標籤（可複選）
+              </span>
 
-              <span className="text-xs text-slate-500">
+              <span className="text-xs font-medium text-slate-600">
                 已選 {selectedTags.length}
               </span>
             </div>
@@ -594,7 +608,7 @@ export function PlaceFormModal({
                       className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${
                         checked
                           ? "border-slate-900 bg-slate-900 text-white"
-                          : "border-slate-200 bg-slate-50 text-slate-600"
+                          : "border-slate-300 bg-slate-50 text-slate-700"
                       }`}
                     >
                       {checked ? "✓ " : ""}
@@ -604,7 +618,7 @@ export function PlaceFormModal({
                 })}
               </div>
             ) : (
-              <p className="text-xs text-slate-400">
+              <p className="text-xs font-medium text-slate-600">
                 尚無既有標籤，可在下方新增。
               </p>
             )}
@@ -620,7 +634,7 @@ export function PlaceFormModal({
                   }
                 }}
                 placeholder="新增標籤，例如：咖啡、景點"
-                className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                className="min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 opacity-100 placeholder:text-slate-500"
               />
 
               <button
@@ -634,7 +648,7 @@ export function PlaceFormModal({
           </div>
 
           <label className="block text-sm">
-            <span className="mb-1 block font-medium">導航目標</span>
+            <span className={labelTitleClassName}>導航目標</span>
 
             {isLoaded ? (
               <Autocomplete
@@ -653,7 +667,7 @@ export function PlaceFormModal({
                     handleChange("navigationTarget", event.target.value)
                   }
                   placeholder="輸入導航目標，例如：漁人碼頭"
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                  className={inputClassName}
                 />
               </Autocomplete>
             ) : (
@@ -663,19 +677,19 @@ export function PlaceFormModal({
                   handleChange("navigationTarget", event.target.value)
                 }
                 placeholder="輸入導航目標，例如：漁人碼頭"
-                className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                className={inputClassName}
               />
             )}
           </label>
 
           <label className="block text-sm">
-            <span className="mb-1 block font-medium">筆記</span>
+            <span className={labelTitleClassName}>筆記</span>
 
             <textarea
               value={formValues.notes}
               onChange={(event) => handleChange("notes", event.target.value)}
               rows={4}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2"
+              className={inputClassName}
             />
           </label>
         </div>
@@ -683,9 +697,14 @@ export function PlaceFormModal({
         <button
           type="button"
           onClick={handleValidateAndSubmit}
-          className="mt-4 w-full rounded-lg bg-orange-500 px-3 py-3 text-sm font-semibold text-white"
+          disabled={isUploadingPhoto}
+          className="mt-4 w-full rounded-lg bg-orange-500 px-3 py-3 text-sm font-bold text-white disabled:bg-slate-400"
         >
-          {mode === "create" ? "新增地點" : "儲存變更"}
+          {isUploadingPhoto
+            ? "照片上傳中..."
+            : mode === "create"
+              ? "新增地點"
+              : "儲存變更"}
         </button>
       </div>
 
