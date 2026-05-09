@@ -19,8 +19,35 @@
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+html {
+  color-scheme: light;
+}
+
+input,
+select,
+textarea {
+  color: #0f172a !important;
+  background-color: #ffffff !important;
+  opacity: 1 !important;
+  -webkit-text-fill-color: #0f172a !important;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #475569 !important;
+  opacity: 1 !important;
+  -webkit-text-fill-color: #475569 !important;
+}
+
+input:disabled,
+select:disabled,
+textarea:disabled {
+  opacity: 1 !important;
+  color: #334155 !important;
+  background-color: #ffffff !important;
+  -webkit-text-fill-color: #334155 !important;
+}
+
+button:disabled {
+  opacity: 0.75 !important;
 }
