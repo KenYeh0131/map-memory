@@ -30,6 +30,7 @@ export type MapGroup = {
   id: string;
   name: string;
   inviteCode?: string;
+  ownerDeviceId?: string;
 };
 
 export type JoinRequest = {
@@ -51,6 +52,8 @@ const CURRENT_GROUP_STORAGE_KEY = "map-memory-current-group-v1";
 const JOINED_GROUPS_STORAGE_KEY = "map-memory-joined-groups-v1";
 const DEVICE_ID_STORAGE_KEY = "map-memory-device-id-v1";
 const NICKNAME_STORAGE_KEY = "map-memory-nickname-v1";
+
+const PHOTO_LIMIT = 10;
 
 const defaultFilters: PlaceFilters = {
   keyword: "",
@@ -85,7 +88,6 @@ function normalizePlace(id: string, data: Partial<PlaceItem>): PlaceItem {
     updatedAt: data.updatedAt ?? new Date().toISOString(),
   };
 }
-
 
 function loadJoinedGroupIds() {
   if (typeof window === "undefined") {
@@ -210,6 +212,7 @@ export default function Home() {
   const [newGroupName, setNewGroupName] = useState("");
   const [joinInviteCode, setJoinInviteCode] = useState("");
   const [joinRequests, setJoinRequests] = useState<JoinRequest[]>([]);
+  const [selectedDeleteTags, setSelectedDeleteTags] = useState<string[]>([]);
   const [isCreatingGroup, setIsCreatingGroup] = useState(false);
   const [isRequestingJoin, setIsRequestingJoin] = useState(false);
   const [isApprovingRequestId, setIsApprovingRequestId] = useState<string | null>(
@@ -244,6 +247,7 @@ export default function Home() {
 
   const currentGroupName = currentGroup?.name ?? "尚未選擇地圖群";
   const currentInviteCode = currentGroup?.inviteCode ?? "";
+  const isGroupOwner = currentGroup?.ownerDeviceId === deviceId;
 
   const groupsCollectionRef = useMemo(() => collection(db, "groups"), []);
 
@@ -261,11 +265,11 @@ export default function Home() {
     const savedGroupId = window.localStorage.getItem(
       CURRENT_GROUP_STORAGE_KEY
     );
-  
+
     if (!savedGroupId) {
       return;
     }
-  
+
     window.setTimeout(() => {
       setCurrentGroupId(savedGroupId);
     }, 0);
@@ -315,6 +319,10 @@ export default function Home() {
                 typeof data.inviteCode === "string"
                   ? data.inviteCode
                   : undefined,
+              ownerDeviceId:
+                typeof data.ownerDeviceId === "string"
+                  ? data.ownerDeviceId
+                  : undefined,
             });
           } else {
             firebaseGroups.push({
@@ -338,7 +346,7 @@ export default function Home() {
     if (allGroups.length === 0) {
       return;
     }
-  
+
     const unsubscribes = allGroups.map((group) => {
       const requestRef = doc(
         db,
@@ -347,26 +355,26 @@ export default function Home() {
         "joinRequests",
         deviceId
       );
-  
+
       return onSnapshot(requestRef, (snapshot) => {
         if (!snapshot.exists()) {
           return;
         }
-  
+
         const data = snapshot.data();
-  
+
         if (data.status === "approved") {
           setJoinedGroupIds((prev) => {
             if (prev.includes(group.id)) {
               return prev;
             }
-  
+
             return [...prev, group.id];
           });
         }
       });
     });
-  
+
     return () => {
       unsubscribes.forEach((unsubscribe) => unsubscribe());
     };
@@ -497,6 +505,7 @@ export default function Home() {
     setPlaces([]);
     setIsLoadingPlaces(true);
     setCurrentGroupId(groupId);
+    setSelectedDeleteTags([]);
   };
 
   const handleCreateGroup = async () => {
@@ -520,16 +529,19 @@ export default function Home() {
       id: createGroupId(trimmedName),
       name: trimmedName,
       inviteCode: createInviteCode(),
+      ownerDeviceId: deviceId,
     };
 
     try {
       await setDoc(doc(db, "groups", newGroup.id), {
         createdAt: new Date().toISOString(),
+        ownerDeviceId: deviceId,
       });
 
       await setDoc(doc(db, "groups", newGroup.id, "info", "meta"), {
         name: newGroup.name,
         inviteCode: newGroup.inviteCode,
+        ownerDeviceId: deviceId,
         createdAt: new Date().toISOString(),
       });
 
@@ -585,7 +597,12 @@ export default function Home() {
             id: groupDocument.id,
             name:
               typeof data.name === "string" ? data.name : groupDocument.id,
-            inviteCode: typeof data.inviteCode === "string" ? data.inviteCode : "",
+            inviteCode:
+              typeof data.inviteCode === "string" ? data.inviteCode : "",
+            ownerDeviceId:
+              typeof data.ownerDeviceId === "string"
+                ? data.ownerDeviceId
+                : undefined,
           };
           break;
         }
@@ -705,6 +722,11 @@ export default function Home() {
       return;
     }
 
+    if (!isGroupOwner) {
+      window.alert("只有建立這個地圖群的人可以刪除地圖群");
+      return;
+    }
+
     const confirmDelete = window.confirm(
       `確定要刪除「${currentGroupName}」嗎？\n\n這會刪除這個地圖群的主資料與所有地點資料，無法復原。`
     );
@@ -730,7 +752,9 @@ export default function Home() {
 
       await Promise.all(
         placesSnapshot.docs.map((placeDocument) =>
-          deleteDoc(doc(db, "groups", currentGroup.id, "places", placeDocument.id))
+          deleteDoc(
+            doc(db, "groups", currentGroup.id, "places", placeDocument.id)
+          )
         )
       );
 
@@ -787,7 +811,7 @@ export default function Home() {
           status: values.status,
           address: values.address.trim(),
           rating: values.rating,
-          photos: values.photos.slice(0, 5),
+          photos: values.photos.slice(0, PHOTO_LIMIT),
           coverPhotoIndex: values.coverPhotoIndex ?? 0,
           completedDate:
             values.status === "visited" ? values.completedDate : "",
@@ -812,7 +836,7 @@ export default function Home() {
           status: values.status,
           address: values.address.trim(),
           rating: values.rating,
-          photos: values.photos.slice(0, 5),
+          photos: values.photos.slice(0, PHOTO_LIMIT),
           coverPhotoIndex: values.coverPhotoIndex ?? 0,
           completedDate:
             values.status === "visited" ? values.completedDate : "",
@@ -846,6 +870,49 @@ export default function Home() {
     } catch (error) {
       console.error(error);
       window.alert("刪除地點失敗，請稍後再試");
+    }
+  };
+
+  const handleToggleDeleteTag = (tag: string) => {
+    setSelectedDeleteTags((prev) =>
+      prev.includes(tag)
+        ? prev.filter((item) => item !== tag)
+        : [...prev, tag]
+    );
+  };
+
+  const handleDeleteSelectedTags = async () => {
+    if (selectedDeleteTags.length === 0) {
+      window.alert("請先選擇要刪除的標籤");
+      return;
+    }
+
+    const confirmDelete = window.confirm(
+      `確定要刪除 ${selectedDeleteTags.length} 個標籤嗎？`
+    );
+
+    if (!confirmDelete) {
+      return;
+    }
+
+    try {
+      const targetPlaces = places.filter((place) =>
+        place.tags.some((tag) => selectedDeleteTags.includes(tag))
+      );
+
+      await Promise.all(
+        targetPlaces.map((place) =>
+          updateDoc(doc(db, "groups", safeCurrentGroupId, "places", place.id), {
+            tags: place.tags.filter((tag) => !selectedDeleteTags.includes(tag)),
+            updatedAt: new Date().toISOString(),
+          })
+        )
+      );
+
+      setSelectedDeleteTags([]);
+    } catch (error) {
+      console.error(error);
+      window.alert("刪除標籤失敗，請稍後再試");
     }
   };
 
@@ -901,7 +968,6 @@ export default function Home() {
           </div>
 
           <div className="rounded-lg bg-orange-50 px-2 py-1.5 text-[11px] text-orange-700">
-            <div>目前顯示：{currentGroupName}</div>
             {currentInviteCode ? <div>邀請碼：{currentInviteCode}</div> : null}
           </div>
         </div>
@@ -939,11 +1005,15 @@ export default function Home() {
       {!isLoadingPlaces && activeTab === "settings" && (
         <SettingsView
           currentGroupName={currentGroupName}
-          currentInviteCode={currentInviteCode}
           nickname={nickname}
           newGroupName={newGroupName}
           joinInviteCode={joinInviteCode}
           joinRequests={joinRequests}
+          availableTags={availableTags}
+          selectedTags={selectedDeleteTags}
+          isGroupOwner={isGroupOwner}
+          onToggleDeleteTag={handleToggleDeleteTag}
+          onDeleteSelectedTags={handleDeleteSelectedTags}
           isCreatingGroup={isCreatingGroup}
           isRequestingJoin={isRequestingJoin}
           isApprovingRequestId={isApprovingRequestId}
