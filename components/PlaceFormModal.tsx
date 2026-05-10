@@ -254,10 +254,10 @@ export function PlaceFormModal({
   const handlePhotoUpload = async (files: FileList | null) => {
     if (!files) return;
 
-    const remain = Math.max(0, 5 - formValues.photos.length);
+    const remain = Math.max(0, 10 - formValues.photos.length);
 
     if (remain === 0) {
-      window.alert("每個地點最多 5 張照片");
+      window.alert("每個地點最多 10 張照片");
       return;
     }
 
@@ -283,7 +283,7 @@ export function PlaceFormModal({
       );
 
       setFormValues((prev) => {
-        const nextPhotos = [...prev.photos, ...uploadedUrls].slice(0, 5);
+        const nextPhotos = [...prev.photos, ...uploadedUrls].slice(0, 10);
 
         return {
           ...prev,
@@ -496,7 +496,7 @@ export function PlaceFormModal({
           </label>
 
           <div className="block text-sm">
-            <span className={labelTitleClassName}>地點照片（最多 5 張）</span>
+            <span className={labelTitleClassName}>地點照片（最多 10 張）</span>
 
             <input
               type="file"
