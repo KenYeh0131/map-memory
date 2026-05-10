@@ -1,7 +1,7 @@
 const sharp = require("sharp");
 const path = require("path");
 
-const input = path.join(__dirname, "../public/icon-source.png");
+const input = path.join(__dirname, "../public/apple-touch-icon.png");
 
 async function run() {
   await sharp(input)
@@ -13,11 +13,6 @@ async function run() {
     .resize(512, 512)
     .png()
     .toFile(path.join(__dirname, "../public/icon-512.png"));
-
-  await sharp(input)
-    .resize(180, 180)
-    .png()
-    .toFile(path.join(__dirname, "../public/apple-touch-icon.png"));
 
   await sharp(input)
     .resize(64, 64)
