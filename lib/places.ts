@@ -1,4 +1,22 @@
-export type PlaceStatus = "wantToGo" | "visited";
+export type PlaceStatus = "wantToGo" | "wantToReturn" | "memory";
+
+export type VisitItem = {
+  id: string;
+  visitDate: string;
+  note: string;
+  photos: string[];
+  rating?: number;
+  companions?: string[];
+  createdAt: string;
+};
+
+export type BestTiming = {
+  months?: number[];
+  timeRanges?: {
+    start: string;
+    end: string;
+  }[];
+};
 
 export type PlaceItem = {
   id: string;
@@ -14,18 +32,25 @@ export type PlaceItem = {
   notes: string;
   lat?: number;
   lng?: number;
+  visits: VisitItem[];
+  visitCount: number;
+  firstVisitedAt?: string;
+  lastVisitedAt?: string;
+  bestTiming?: BestTiming;
   createdAt: string;
   updatedAt: string;
 };
 
 export const STATUS_LABELS: Record<PlaceStatus, string> = {
-  wantToGo: "想一起去",
-  visited: "我們完成了",
+  wantToGo: "想去",
+  wantToReturn: "還想去",
+  memory: "回憶中",
 };
 
 export const STATUS_OPTIONS = [
   { value: "wantToGo", label: STATUS_LABELS.wantToGo },
-  { value: "visited", label: STATUS_LABELS.visited },
+  { value: "wantToReturn", label: STATUS_LABELS.wantToReturn },
+  { value: "memory", label: STATUS_LABELS.memory },
 ] as const;
 
 export const RATING_OPTIONS = [0, 1, 2, 3, 4, 5] as const;
@@ -45,6 +70,8 @@ export const defaultPlacesSeed: PlaceItem[] = [
     notes: "傍晚去看夕陽，拍照應該很棒。",
     lat: 25.1826,
     lng: 121.4104,
+    visits: [],
+    visitCount: 0,
     createdAt: now,
     updatedAt: now,
   },

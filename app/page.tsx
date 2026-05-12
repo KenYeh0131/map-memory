@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   collection,
   deleteDoc,
+  deleteField,
   doc,
   getDoc,
   getDocs,
@@ -21,6 +22,10 @@ import {
 } from "@/components/PlaceFormModal";
 import { PlaceListView, type PlaceFilters } from "@/components/PlaceListView";
 import { SettingsView } from "@/components/SettingsView";
+import {
+  VisitFormModal,
+  type VisitFormValues,
+} from "@/components/VisitFormModal";
 import { db } from "@/lib/firebase";
 import type { PlaceItem } from "@/lib/places";
 
@@ -43,6 +48,8 @@ export type JoinRequest = {
   reviewedAt?: string;
 };
 
+type VisitItem = NonNullable<PlaceItem["visits"]>[number];
+
 const FALLBACK_GROUPS: MapGroup[] = [
   { id: "family", name: "我們的回憶地圖", inviteCode: "FAMILY888" },
 ];
@@ -57,7 +64,7 @@ const PHOTO_LIMIT = 10;
 
 const defaultFilters: PlaceFilters = {
   keyword: "",
-  status: "wantToGo",
+  status: "all",
   minRating: "all",
   tags: [],
 };
@@ -78,12 +85,16 @@ function normalizePlace(id: string, data: Partial<PlaceItem>): PlaceItem {
     rating: data.rating ?? 0,
     photos: Array.isArray(data.photos) ? data.photos : [],
     coverPhotoIndex: data.coverPhotoIndex ?? 0,
-    completedDate: data.completedDate ?? "",
     tags: Array.isArray(data.tags) ? data.tags : [],
     navigationTarget: data.navigationTarget ?? "",
     notes: data.notes ?? "",
     lat: data.lat,
     lng: data.lng,
+    visits: Array.isArray(data.visits) ? data.visits : [],
+    visitCount: data.visitCount ?? 0,
+    firstVisitedAt: data.firstVisitedAt,
+    lastVisitedAt: data.lastVisitedAt,
+    bestTiming: data.bestTiming,
     createdAt: data.createdAt ?? new Date().toISOString(),
     updatedAt: data.updatedAt ?? new Date().toISOString(),
   };
@@ -204,6 +215,29 @@ function getVisibleGroups(allGroups: MapGroup[], joinedGroupIds: string[]) {
   return allGroups.filter((group) => joinedSet.has(group.id));
 }
 
+function getVisitDates(visits: VisitItem[]) {
+  return visits.map((visit) => visit.visitDate).filter(Boolean).sort();
+}
+
+function buildVisitSummaryUpdate(visits: VisitItem[]) {
+  const sortedDates = getVisitDates(visits);
+  const updateData: Record<string, unknown> = {
+    visits,
+    visitCount: visits.length,
+    updatedAt: new Date().toISOString(),
+  };
+
+  if (sortedDates.length > 0) {
+    updateData.firstVisitedAt = sortedDates[0];
+    updateData.lastVisitedAt = sortedDates[sortedDates.length - 1];
+  } else {
+    updateData.firstVisitedAt = deleteField();
+    updateData.lastVisitedAt = deleteField();
+  }
+
+  return updateData;
+}
+
 export default function Home() {
   const [activeTab, setActiveTab] = useState<TabId>("map");
   const [allGroups, setAllGroups] = useState<MapGroup[]>(FALLBACK_GROUPS);
@@ -220,12 +254,10 @@ export default function Home() {
   const [isJoinRequestPopupOpen, setIsJoinRequestPopupOpen] = useState(false);
   const [isCreatingGroup, setIsCreatingGroup] = useState(false);
   const [isRequestingJoin, setIsRequestingJoin] = useState(false);
-  const [isApprovingRequestId, setIsApprovingRequestId] = useState<string | null>(
-    null
-  );
-  const [isRejectingRequestId, setIsRejectingRequestId] = useState<string | null>(
-    null
-  );
+  const [isApprovingRequestId, setIsApprovingRequestId] =
+    useState<string | null>(null);
+  const [isRejectingRequestId, setIsRejectingRequestId] =
+    useState<string | null>(null);
   const [isLeavingGroup, setIsLeavingGroup] = useState(false);
   const [isDeletingGroup, setIsDeletingGroup] = useState(false);
   const [places, setPlaces] = useState<PlaceItem[]>([]);
@@ -235,6 +267,16 @@ export default function Home() {
   const [formMode, setFormMode] = useState<"create" | "edit">("create");
   const [editingPlace, setEditingPlace] = useState<PlaceItem | null>(null);
   const [isLoadingPlaces, setIsLoadingPlaces] = useState(true);
+  const [isVisitModalOpen, setIsVisitModalOpen] = useState(false);
+  const [visitFormMode, setVisitFormMode] = useState<"create" | "edit">(
+    "create"
+  );
+  const [visitTargetPlace, setVisitTargetPlace] = useState<PlaceItem | null>(
+    null
+  );
+  const [editingVisitId, setEditingVisitId] = useState<string | null>(null);
+  const [editingVisitValues, setEditingVisitValues] =
+    useState<VisitFormValues | null>(null);
 
   const mapGroups = useMemo(
     () => getVisibleGroups(allGroups, joinedGroupIds),
@@ -267,9 +309,7 @@ export default function Home() {
   );
 
   useEffect(() => {
-    const savedGroupId = window.localStorage.getItem(
-      CURRENT_GROUP_STORAGE_KEY
-    );
+    const savedGroupId = window.localStorage.getItem(CURRENT_GROUP_STORAGE_KEY);
 
     if (!savedGroupId) {
       return;
@@ -340,8 +380,7 @@ export default function Home() {
         }
       }
 
-      const nextGroups = mergeGroups(firebaseGroups);
-      setAllGroups(nextGroups);
+      setAllGroups(mergeGroups(firebaseGroups));
     });
 
     return () => unsubscribe();
@@ -501,6 +540,51 @@ export default function Home() {
   const closeForm = () => {
     setIsFormOpen(false);
     setEditingPlace(null);
+  };
+
+  const openVisitModal = (place: PlaceItem) => {
+    setVisitFormMode("create");
+    setVisitTargetPlace(place);
+    setEditingVisitId(null);
+    setEditingVisitValues(null);
+    setIsVisitModalOpen(true);
+  };
+
+  const openEditVisitModal = (placeId: string, visitId: string) => {
+    const targetPlace = places.find((place) => place.id === placeId);
+
+    if (!targetPlace) {
+      window.alert("找不到這個地點");
+      return;
+    }
+
+    const targetVisit = Array.isArray(targetPlace.visits)
+      ? targetPlace.visits.find((visit) => visit.id === visitId)
+      : null;
+
+    if (!targetVisit) {
+      window.alert("找不到這筆回憶");
+      return;
+    }
+
+    setVisitFormMode("edit");
+    setVisitTargetPlace(targetPlace);
+    setEditingVisitId(visitId);
+    setEditingVisitValues({
+      visitDate: targetVisit.visitDate,
+      note: targetVisit.note ?? "",
+      photos: Array.isArray(targetVisit.photos) ? targetVisit.photos : [],
+      rating: targetVisit.rating ?? 0,
+    });
+    setIsVisitModalOpen(true);
+  };
+
+  const closeVisitModal = () => {
+    setVisitTargetPlace(null);
+    setEditingVisitId(null);
+    setEditingVisitValues(null);
+    setVisitFormMode("create");
+    setIsVisitModalOpen(false);
   };
 
   const handleChangeGroup = (groupId: string) => {
@@ -771,7 +855,13 @@ export default function Home() {
       await Promise.all(
         requestsSnapshot.docs.map((requestDocument) =>
           deleteDoc(
-            doc(db, "groups", currentGroup.id, "joinRequests", requestDocument.id)
+            doc(
+              db,
+              "groups",
+              currentGroup.id,
+              "joinRequests",
+              requestDocument.id
+            )
           )
         )
       );
@@ -819,13 +909,13 @@ export default function Home() {
           rating: values.rating,
           photos: values.photos.slice(0, PHOTO_LIMIT),
           coverPhotoIndex: values.coverPhotoIndex ?? 0,
-          completedDate:
-            values.status === "visited" ? values.completedDate : "",
           tags: normalizeTags(values.tagsText),
           navigationTarget: values.navigationTarget.trim(),
           notes: values.notes.trim(),
           lat: values.lat ?? 25.052013567893294,
           lng: values.lng ?? 121.36444898053523,
+          visits: [],
+          visitCount: 0,
           createdAt: now,
           updatedAt: now,
         };
@@ -844,8 +934,6 @@ export default function Home() {
           rating: values.rating,
           photos: values.photos.slice(0, PHOTO_LIMIT),
           coverPhotoIndex: values.coverPhotoIndex ?? 0,
-          completedDate:
-            values.status === "visited" ? values.completedDate : "",
           tags: normalizeTags(values.tagsText),
           navigationTarget: values.navigationTarget.trim(),
           notes: values.notes.trim(),
@@ -866,6 +954,108 @@ export default function Home() {
     } catch (error) {
       console.error(error);
       window.alert("儲存地點失敗，請確認 Firebase Firestore 規則是否為測試模式");
+    }
+  };
+
+  const handleAddVisit = async (values: VisitFormValues) => {
+    if (!visitTargetPlace) return;
+
+    try {
+      const now = new Date().toISOString();
+
+      if (visitFormMode === "edit" && editingVisitId) {
+        const currentVisits = Array.isArray(visitTargetPlace.visits)
+          ? visitTargetPlace.visits
+          : [];
+
+        const nextVisits = currentVisits.map((visit) =>
+          visit.id === editingVisitId
+            ? {
+                ...visit,
+                visitDate: values.visitDate,
+                note: values.note,
+                photos: values.photos,
+                rating: values.rating ?? 0,
+                updatedAt: now,
+              }
+            : visit
+        );
+
+        await updateDoc(
+          doc(db, "groups", safeCurrentGroupId, "places", visitTargetPlace.id),
+          buildVisitSummaryUpdate(nextVisits)
+        );
+
+        setSelectedPlaceId(visitTargetPlace.id);
+        closeVisitModal();
+        return;
+      }
+
+      const nextVisit = {
+        id: `visit-${Date.now()}`,
+        visitDate: values.visitDate,
+        note: values.note,
+        photos: values.photos,
+        rating: values.rating ?? 0,
+        createdAt: now,
+      };
+
+      const currentVisits = Array.isArray(visitTargetPlace.visits)
+        ? visitTargetPlace.visits
+        : [];
+
+      const nextVisits = [nextVisit, ...currentVisits];
+      const updatedPlace = buildVisitSummaryUpdate(nextVisits);
+
+      if (visitTargetPlace.status === "wantToGo") {
+        updatedPlace.status = "wantToReturn";
+      }
+
+      await updateDoc(
+        doc(db, "groups", safeCurrentGroupId, "places", visitTargetPlace.id),
+        updatedPlace
+      );
+
+      setSelectedPlaceId(visitTargetPlace.id);
+      closeVisitModal();
+    } catch (error) {
+      console.error(error);
+      window.alert(
+        visitFormMode === "edit" ? "更新回憶失敗，請稍後再試" : "新增回憶失敗，請稍後再試"
+      );
+    }
+  };
+
+  const handleDeleteVisit = async (placeId: string, visitId: string) => {
+    const targetPlace = places.find((place) => place.id === placeId);
+
+    if (!targetPlace) {
+      window.alert("找不到這個地點");
+      return;
+    }
+
+    const confirmDelete = window.confirm("確定要刪除這筆回憶嗎？");
+
+    if (!confirmDelete) {
+      return;
+    }
+
+    try {
+      const currentVisits = Array.isArray(targetPlace.visits)
+        ? targetPlace.visits
+        : [];
+
+      const nextVisits = currentVisits.filter((visit) => visit.id !== visitId);
+
+      await updateDoc(
+        doc(db, "groups", safeCurrentGroupId, "places", placeId),
+        buildVisitSummaryUpdate(nextVisits)
+      );
+
+      setSelectedPlaceId((prev) => (prev === placeId ? placeId : prev));
+    } catch (error) {
+      console.error(error);
+      window.alert("刪除回憶失敗，請稍後再試");
     }
   };
 
@@ -1008,6 +1198,9 @@ export default function Home() {
             onSelectPlace={setSelectedPlaceId}
             onCreatePlace={openCreateForm}
             onEditPlace={openEditForm}
+            onAddVisit={openVisitModal}
+            onEditVisit={openEditVisitModal}
+            onDeleteVisit={handleDeleteVisit}
           />
         </div>
       )}
@@ -1020,6 +1213,9 @@ export default function Home() {
           onFiltersChange={setFilters}
           onEditPlace={openEditForm}
           onDeletePlace={handleDeletePlace}
+          onAddVisit={openVisitModal}
+          onEditVisit={openEditVisitModal}
+          onDeleteVisit={handleDeleteVisit}
         />
       )}
 
@@ -1063,6 +1259,15 @@ export default function Home() {
         availableTags={availableTags}
         onClose={closeForm}
         onSubmit={handleSubmitForm}
+      />
+
+      <VisitFormModal
+        isOpen={isVisitModalOpen}
+        mode={visitFormMode}
+        placeName={visitTargetPlace?.name ?? ""}
+        initialValues={editingVisitValues}
+        onClose={closeVisitModal}
+        onSubmit={handleAddVisit}
       />
 
       {isJoinRequestPopupOpen ? (

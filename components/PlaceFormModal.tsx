@@ -46,6 +46,74 @@ const inputClassName =
   "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 opacity-100 placeholder:text-slate-500";
 
 const labelTitleClassName = "mb-1 block font-semibold text-slate-800";
+const PLACE_PHOTO_LIMIT = 1;
+
+
+async function compressImage(file: File): Promise<File> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const reader = new FileReader();
+
+    reader.onload = (event) => {
+      img.src = event.target?.result as string;
+    };
+
+    reader.onerror = reject;
+
+    img.onload = () => {
+      const maxSize = 1600;
+
+      let width = img.width;
+      let height = img.height;
+
+      if (width > height && width > maxSize) {
+        height = Math.round((height * maxSize) / width);
+        width = maxSize;
+      } else if (height > maxSize) {
+        width = Math.round((width * maxSize) / height);
+        height = maxSize;
+      }
+
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+
+      const ctx = canvas.getContext("2d");
+
+      if (!ctx) {
+        reject(new Error("Canvas context not found"));
+        return;
+      }
+
+      ctx.drawImage(img, 0, 0, width, height);
+
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) {
+            reject(new Error("Compression failed"));
+            return;
+          }
+
+          const compressedFile = new File(
+            [blob],
+            file.name.replace(/\.[^.]+$/, ".webp"),
+            {
+              type: "image/webp",
+            }
+          );
+
+          resolve(compressedFile);
+        },
+        "image/webp",
+        0.75
+      );
+    };
+
+    img.onerror = reject;
+
+    reader.readAsDataURL(file);
+  });
+}
 
 function todayText() {
   return new Date().toISOString().slice(0, 10);
@@ -64,7 +132,7 @@ function buildInitialValues(initialPlace: PlaceItem | null): PlaceFormValues {
     status: initialPlace?.status ?? "wantToGo",
     address: initialPlace?.address ?? "",
     rating: initialPlace?.rating ?? 0,
-    photos: initialPlace?.photos ?? [],
+    photos: (initialPlace?.photos ?? []).slice(0, PLACE_PHOTO_LIMIT),
     coverPhotoIndex: initialPlace?.coverPhotoIndex ?? 0,
     completedDate: initialPlace?.completedDate ?? "",
     lat: initialPlace?.lat,
@@ -252,23 +320,22 @@ export function PlaceFormModal({
   };
 
   const handlePhotoUpload = async (files: FileList | null) => {
-    if (!files) return;
+    if (!files || files.length === 0) return;
 
-    const remain = Math.max(0, 10 - formValues.photos.length);
-
-    if (remain === 0) {
-      window.alert("每個地點最多 10 張照片");
+    if (formValues.photos.length >= PLACE_PHOTO_LIMIT) {
+      window.alert("地點照片最多 1 張，請先刪除原本照片再重新上傳");
       return;
     }
 
-    const selectedFiles = Array.from(files).slice(0, remain);
+    const selectedFiles = Array.from(files).slice(0, PLACE_PHOTO_LIMIT);
 
     setIsUploadingPhoto(true);
 
     try {
       const uploadedUrls = await Promise.all(
         selectedFiles.map(async (file) => {
-          const safeFileName = file.name.replace(/[^\w.\-]/g, "_");
+          const compressedFile = await compressImage(file);
+          const safeFileName = compressedFile.name.replace(/[^\w.\-]/g, "_");
 
           const fileName = `${Date.now()}-${Math.random()
             .toString(36)
@@ -276,27 +343,17 @@ export function PlaceFormModal({
 
           const storageRef = ref(storage, `places/${fileName}`);
 
-          await uploadBytes(storageRef, file);
+          await uploadBytes(storageRef, compressedFile);
 
           return await getDownloadURL(storageRef);
         })
       );
 
-      setFormValues((prev) => {
-        const nextPhotos = [...prev.photos, ...uploadedUrls].slice(0, 10);
-
-        return {
-          ...prev,
-          photos: nextPhotos,
-          coverPhotoIndex:
-            prev.photos.length === 0 && nextPhotos.length > 0
-              ? 0
-              : Math.min(
-                  prev.coverPhotoIndex,
-                  Math.max(0, nextPhotos.length - 1)
-                ),
-        };
-      });
+      setFormValues((prev) => ({
+        ...prev,
+        photos: uploadedUrls.slice(0, PLACE_PHOTO_LIMIT),
+        coverPhotoIndex: 0,
+      }));
     } catch (error) {
       console.error(error);
       window.alert("照片上傳失敗，請稍後再試");
@@ -496,13 +553,12 @@ export function PlaceFormModal({
           </label>
 
           <div className="block text-sm">
-            <span className={labelTitleClassName}>地點照片（最多 10 張）</span>
+            <span className={labelTitleClassName}>地點照片（最多 1 張）</span>
 
             <input
               type="file"
               accept="image/*"
-              multiple
-              disabled={isUploadingPhoto}
+              disabled={isUploadingPhoto || formValues.photos.length >= PLACE_PHOTO_LIMIT}
               onChange={(event) => {
                 handlePhotoUpload(event.target.files).catch(() => {
                   window.alert("照片讀取失敗，請重新上傳");
@@ -516,11 +572,11 @@ export function PlaceFormModal({
             <p className="mt-1 text-xs font-medium text-slate-600">
               {isUploadingPhoto
                 ? "照片上傳中..."
-                : `已上傳 ${formValues.photos.length}/5`}
+                : `已上傳 ${formValues.photos.length}/1`}
             </p>
 
             {formValues.photos.length > 0 ? (
-              <div className="mt-2 grid grid-cols-3 gap-2">
+              <div className="mt-2 grid grid-cols-1 gap-2">
                 {formValues.photos.map((photo, index) => {
                   const isCover = formValues.coverPhotoIndex === index;
 
@@ -547,7 +603,7 @@ export function PlaceFormModal({
                           <img
                             src={photo}
                             alt={`photo-${index + 1}`}
-                            className="h-20 w-full object-cover"
+                            className="h-40 w-full object-cover"
                           />
                         </button>
 
@@ -566,17 +622,9 @@ export function PlaceFormModal({
                         </button>
                       </div>
 
-                      <button
-                        type="button"
-                        onClick={() => handleChange("coverPhotoIndex", index)}
-                        className={`w-full px-2 py-1.5 text-[11px] font-semibold ${
-                          isCover
-                            ? "bg-orange-500 text-white"
-                            : "bg-white text-slate-700"
-                        }`}
-                      >
-                        {isCover ? "目前封面" : "設為封面"}
-                      </button>
+                      <div className="bg-white px-2 py-1.5 text-center text-[11px] font-semibold text-slate-600">
+                        地點封面照片
+                      </div>
                     </div>
                   );
                 })}
