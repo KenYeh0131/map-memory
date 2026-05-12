@@ -258,7 +258,7 @@ export function PlaceFormModal({
       ...prev,
       status: nextStatus,
       completedDate:
-        nextStatus === "visited" ? prev.completedDate || todayText() : "",
+      nextStatus === "wantToReturn" ? prev.completedDate || todayText() : "",
     }));
   };
 
