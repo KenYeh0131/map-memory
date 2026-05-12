@@ -464,7 +464,7 @@ export function PlaceFormModal({
             </select>
           </label>
 
-          {formValues.status === "visited" ? (
+          {formValues.status === "viwantToReturn" ? (
             <label className="block text-sm">
               <span className={labelTitleClassName}>完成日期</span>
 
