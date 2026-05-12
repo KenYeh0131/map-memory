@@ -315,7 +315,7 @@ export function PlaceFormModal({
       ...formValues,
       coverPhotoIndex: safeCoverPhotoIndex,
       completedDate:
-        formValues.status === "visited" ? formValues.completedDate : "",
+        formValues.status === "wantToReturn" ? formValues.completedDate : "",
     });
   };
 
