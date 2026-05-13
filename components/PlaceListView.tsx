@@ -29,7 +29,7 @@ type PhotoPreviewState = {
 } | null;
 
 const RATING_CHIPS = [0, 1, 2, 3, 4, 5] as const;
-const TIMELINE_PHOTO_LIMIT = 2;
+const TIMELINE_PHOTO_LIMIT = 3;
 
 function formatDate(dateText?: string) {
   if (!dateText) return "";
@@ -48,7 +48,7 @@ function getStatusInfo(status: PlaceStatus | string | undefined) {
 
   if (status === "memory") {
     return {
-      label: "🫧 打卡完成",
+      label: "🫧 回憶中",
       className: "bg-slate-200 text-slate-600",
       emptyEmoji: "🤍",
       emptyText: "留在回憶裡",
@@ -241,95 +241,6 @@ export function PlaceListView({
     });
   }, []);
 
-  const renderMemoryCard = (visit: NonNullable<PlaceItem["visits"]>[number]) => {
-    if (!detailPlace) return null;
-
-    const photos = Array.isArray(visit.photos) ? visit.photos : [];
-    const visiblePhotos = photos.slice(0, TIMELINE_PHOTO_LIMIT);
-    const hiddenPhotoCount = Math.max(0, photos.length - TIMELINE_PHOTO_LIMIT);
-
-    return (
-      <div
-        key={visit.id}
-        className="relative grid h-36 grid-cols-[0.9fr_1.1fr] gap-3 rounded-2xl border bg-white p-3 shadow-sm"
-      >
-        <div className="absolute right-2 top-2 z-10 flex gap-1">
-          <button
-            type="button"
-            onClick={() => onEditVisit(detailPlace.id, visit.id)}
-            className="rounded-full bg-slate-100 px-2 py-1 text-xs font-bold text-slate-700"
-          >
-            📝
-          </button>
-
-          <button
-            type="button"
-            onClick={() => onDeleteVisit(detailPlace.id, visit.id)}
-            className="rounded-full bg-rose-100 px-2 py-1 text-xs font-bold text-rose-600"
-          >
-            🗑️
-          </button>
-        </div>
-
-        <div className="min-w-0 pr-12">
-          <div className="flex items-center gap-2">
-            <div className="shrink-0 text-sm font-bold text-slate-900">
-              {formatDate(visit.visitDate)}
-            </div>
-
-            <div className="flex items-center gap-0.5 text-xs">
-              {renderRating(visit.rating)}
-            </div>
-          </div>
-
-          <div className="mt-2 max-h-24 overflow-y-auto whitespace-pre-wrap break-words pr-1 text-sm leading-5 text-slate-700">
-            {visit.note || "沒有文字紀錄"}
-          </div>
-        </div>
-
-        <div className="grid h-24 grid-cols-2 gap-2 self-center">
-          {visiblePhotos.map((photo, index) => (
-            <button
-              key={`${photo}-${index}`}
-              type="button"
-              onClick={() => handleOpenPhotoPreview(photos, index)}
-              className="relative h-24 overflow-hidden rounded-xl"
-            >
-              <img
-                src={photo}
-                alt={`visit-photo-${index + 1}`}
-                className="h-full w-full object-cover"
-              />
-
-              {index === 1 && hiddenPhotoCount > 0 ? (
-                <div className="absolute inset-0 flex items-center justify-center bg-black/50 text-lg font-bold text-white">
-                  +{hiddenPhotoCount}
-                </div>
-              ) : null}
-            </button>
-          ))}
-
-          {visiblePhotos.length === 0 ? (
-            <>
-              <div className="flex h-24 items-center justify-center rounded-xl bg-slate-100 text-[10px] text-slate-400">
-                無照片
-              </div>
-              <div className="flex h-24 items-center justify-center rounded-xl bg-slate-100 text-[10px] text-slate-400">
-                無照片
-              </div>
-            </>
-          ) : null}
-
-          {visiblePhotos.length === 1 ? (
-            <div className="flex h-24 items-center justify-center rounded-xl bg-slate-100 text-[10px] text-slate-400">
-              無照片
-            </div>
-          ) : null}
-        </div>
-      </div>
-    );
-  };
-
   return (
     <section className="space-y-4 px-4 pb-28 pt-3">
       <div className="rounded-2xl border bg-white p-4 shadow-sm">
@@ -382,7 +293,7 @@ export function PlaceListView({
                     : "bg-slate-100 text-slate-400"
                 }`}
               >
-                🫧 打卡完成
+                🫧 回憶中
               </button>
             </div>
 
@@ -611,41 +522,6 @@ export function PlaceListView({
                 </button>
               </div>
 
-              <div className="mt-3 rounded-2xl bg-slate-50 p-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span
-                    className={`rounded-full px-2 py-1 text-xs font-bold ${
-                      getStatusInfo(detailPlace.status).className
-                    }`}
-                  >
-                    {getStatusInfo(detailPlace.status).label}
-                  </span>
-
-                  <div className="flex items-center gap-0.5 text-sm">
-                    {renderRating(detailPlace.rating)}
-                  </div>
-
-                  <div className="flex flex-wrap gap-1">
-                    {detailPlace.tags?.length > 0 ? (
-                      detailPlace.tags.map((tag) => (
-                        <span
-                          key={tag}
-                          className="rounded-full bg-white px-2 py-0.5 text-[10px] text-slate-600"
-                        >
-                          #{tag}
-                        </span>
-                      ))
-                    ) : (
-                      <span className="text-xs text-slate-400">無標籤</span>
-                    )}
-                  </div>
-                </div>
-
-                <div className="mt-2 max-h-16 overflow-y-auto whitespace-pre-wrap break-words text-sm leading-5 text-slate-700">
-                  {detailPlace.notes || "沒有地點筆記"}
-                </div>
-              </div>
-
               <div className="mt-6">
                 <h3 className="mb-3 text-base font-bold text-slate-900">
                   回憶時間軸
@@ -657,7 +533,89 @@ export function PlaceListView({
                   </div>
                 ) : (
                   <div className="space-y-4">
-                    {sortedVisits.map((visit) => renderMemoryCard(visit))}
+                    {sortedVisits.map((visit) => {
+                      const photos = Array.isArray(visit.photos)
+                        ? visit.photos
+                        : [];
+                      const visiblePhotos = photos.slice(0, TIMELINE_PHOTO_LIMIT);
+                      const hiddenPhotoCount = Math.max(
+                        0,
+                        photos.length - TIMELINE_PHOTO_LIMIT
+                      );
+
+                      return (
+                        <div
+                          key={visit.id}
+                          className="relative h-56 overflow-hidden rounded-2xl border bg-white p-3 shadow-sm"
+                        >
+                          <div className="absolute right-2 top-2 flex gap-1">
+                            <button
+                              type="button"
+                              onClick={() => onEditVisit(detailPlace.id, visit.id)}
+                              className="rounded-full bg-slate-100 px-2 py-1 text-xs font-bold text-slate-700"
+                            >
+                              📝
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onDeleteVisit(detailPlace.id, visit.id)
+                              }
+                              className="rounded-full bg-rose-100 px-2 py-1 text-xs font-bold text-rose-600"
+                            >
+                              🗑️
+                            </button>
+                          </div>
+
+                          <div className="flex items-center gap-2 pr-20">
+                            <div className="shrink-0 text-sm font-bold text-slate-900">
+                              {formatDate(visit.visitDate)}
+                            </div>
+
+                            <div className="flex items-center gap-0.5 text-sm">
+                              {renderRating(visit.rating)}
+                            </div>
+                          </div>
+
+                          <div className="mt-2 h-12 overflow-hidden whitespace-pre-wrap text-sm text-slate-700">
+                            {visit.note || "沒有文字紀錄"}
+                          </div>
+
+                          {photos.length > 0 ? (
+                            <div className="mt-3 grid grid-cols-3 gap-2">
+                              {visiblePhotos.map((photo, index) => (
+                                <button
+                                  key={`${photo}-${index}`}
+                                  type="button"
+                                  onClick={() =>
+                                    handleOpenPhotoPreview(photos, index)
+                                  }
+                                  className="relative h-24 overflow-hidden rounded-xl"
+                                >
+                                  <img
+                                    src={photo}
+                                    alt={`visit-photo-${index + 1}`}
+                                    className="h-full w-full object-cover"
+                                  />
+
+                                  {index === TIMELINE_PHOTO_LIMIT - 1 &&
+                                  hiddenPhotoCount > 0 ? (
+                                    <div className="absolute inset-0 flex items-center justify-center bg-black/50 text-lg font-bold text-white">
+                                      +{hiddenPhotoCount}
+                                    </div>
+                                  ) : null}
+                                </button>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="mt-3 flex h-24 items-center justify-center rounded-xl bg-slate-50 text-xs text-slate-400">
+                              沒有照片
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>
