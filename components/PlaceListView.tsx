@@ -243,7 +243,7 @@ export function PlaceListView({
 
   return (
     <section className="space-y-4 px-4 pb-28 pt-3">
-      <div className="rounded-2xl border bg-white p-4 shadow-sm">
+      <div className="rounded-2xl border bg-white p-4 shadow-lg">
         <button
           type="button"
           onClick={handleToggleFilterPanel}
@@ -263,7 +263,7 @@ export function PlaceListView({
               <button
                 type="button"
                 onClick={() => handleStatusChange("wantToGo")}
-                className={`rounded-xl px-3 py-2 text-sm font-bold ${
+                className={`rounded-xl px-2 py-2 text-xs font-bold ${
                   filters.status === "wantToGo"
                     ? "bg-red-100 text-red-600"
                     : "bg-slate-100 text-slate-400"
@@ -275,25 +275,25 @@ export function PlaceListView({
               <button
                 type="button"
                 onClick={() => handleStatusChange("wantToReturn")}
-                className={`rounded-xl px-3 py-2 text-sm font-bold ${
+                className={`rounded-xl px-2 py-2 text-xs font-bold ${
                   filters.status === "wantToReturn"
                     ? "bg-orange-100 text-orange-600"
                     : "bg-slate-100 text-slate-400"
                 }`}
               >
-                ✨ 還想去
+                ✨ 還想再去
               </button>
 
               <button
                 type="button"
                 onClick={() => handleStatusChange("memory")}
-                className={`rounded-xl px-3 py-2 text-sm font-bold ${
+                className={`rounded-xl px-2 py-2 text-xs font-bold ${
                   filters.status === "memory"
                     ? "bg-slate-300 text-slate-700"
                     : "bg-slate-100 text-slate-400"
                 }`}
               >
-                🫧 回憶中
+                🫧 打卡完成
               </button>
             </div>
 
@@ -301,7 +301,7 @@ export function PlaceListView({
               value={filters.keyword}
               onChange={(e) => handleKeywordChange(e.target.value)}
               placeholder="搜尋地點、地址、筆記..."
-              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+              className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
             />
 
             <div className="flex flex-wrap gap-1">
