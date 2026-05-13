@@ -29,7 +29,7 @@ type PhotoPreviewState = {
 } | null;
 
 const RATING_CHIPS = [0, 1, 2, 3, 4, 5] as const;
-const TIMELINE_PHOTO_LIMIT = 3;
+const TIMELINE_PHOTO_LIMIT = 2;
 
 function formatDate(dateText?: string) {
   if (!dateText) return "";
@@ -48,7 +48,7 @@ function getStatusInfo(status: PlaceStatus | string | undefined) {
 
   if (status === "memory") {
     return {
-      label: "🫧 回憶中",
+      label: "🫧 打卡完成",
       className: "bg-slate-200 text-slate-600",
       emptyEmoji: "🤍",
       emptyText: "留在回憶裡",
@@ -583,7 +583,7 @@ export function PlaceListView({
                           </div>
 
                           {photos.length > 0 ? (
-                            <div className="mt-3 grid grid-cols-3 gap-2">
+                            <div className="grid h-24 grid-cols-2 gap-2 self-center">
                               {visiblePhotos.map((photo, index) => (
                                 <button
                                   key={`${photo}-${index}`}
@@ -599,7 +599,7 @@ export function PlaceListView({
                                     className="h-full w-full object-cover"
                                   />
 
-                                  {index === TIMELINE_PHOTO_LIMIT - 1 &&
+                                  {index === 1 &&
                                   hiddenPhotoCount > 0 ? (
                                     <div className="absolute inset-0 flex items-center justify-center bg-black/50 text-lg font-bold text-white">
                                       +{hiddenPhotoCount}

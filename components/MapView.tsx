@@ -12,8 +12,6 @@ type MapViewProps = {
   onCreatePlace: () => void;
   onEditPlace: (place: PlaceItem) => void;
   onAddVisit: (place: PlaceItem) => void;
-  onEditVisit: (placeId: string, visitId: string) => void;
-  onDeleteVisit: (placeId: string, visitId: string) => void;
 };
 
 type MapFilterState = {
@@ -41,7 +39,6 @@ const defaultMapFilters: MapFilterState = {
 
 const RATING_CHIPS = [0, 1, 2, 3, 4, 5] as const;
 const GOOGLE_MAP_LIBRARIES: "places"[] = ["places"];
-const TIMELINE_PHOTO_LIMIT = 2;
 
 function formatDate(dateText?: string) {
   if (!dateText) return "";
@@ -141,15 +138,13 @@ export function MapView({
   onCreatePlace,
   onEditPlace,
   onAddVisit,
-  onEditVisit,
-  onDeleteVisit,
 }: MapViewProps) {
   const [mapFilters, setMapFilters] =
     useState<MapFilterState>(defaultMapFilters);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [currentPosition, setCurrentPosition] =
     useState<google.maps.LatLngLiteral | null>(null);
-  const [timelinePlaceId, setTimelinePlaceId] = useState<string | null>(null);
+  const [timelinePlace, setTimelinePlace] = useState<PlaceItem | null>(null);
   const [photoPreview, setPhotoPreview] = useState<PhotoPreviewState>(null);
 
   const mapRef = useRef<google.maps.Map | null>(null);
@@ -214,12 +209,6 @@ export function MapView({
     return places.find((place) => place.id === selectedPlaceId) ?? null;
   }, [places, selectedPlaceId]);
 
-  const timelinePlace = useMemo(() => {
-    if (!timelinePlaceId) return null;
-
-    return places.find((place) => place.id === timelinePlaceId) ?? null;
-  }, [places, timelinePlaceId]);
-
   const allTags = useMemo(() => {
     const tags = new Set<string>();
 
@@ -237,7 +226,7 @@ export function MapView({
       if (place.status === "wantToGo" && !mapFilters.showWantToGo) return false;
 
       if (
-        place.status === "wantToReturn" &&
+        (place.status === "wantToReturn" || place.status === "visited") &&
         !mapFilters.showWantToReturn
       ) {
         return false;
@@ -283,7 +272,7 @@ export function MapView({
     return [...timelinePlace.visits].sort((a, b) =>
       b.visitDate.localeCompare(a.visitDate)
     );
-  }, [timelinePlace?.visits]);
+  }, [timelinePlace]);
 
   const markerIcons = useMemo(() => {
     if (!isLoaded || typeof google === "undefined") {
@@ -367,11 +356,11 @@ export function MapView({
 
     if (!hasVisits) return;
 
-    setTimelinePlaceId(place.id);
+    setTimelinePlace(place);
   }, []);
 
   const handleCloseTimeline = useCallback(() => {
-    setTimelinePlaceId(null);
+    setTimelinePlace(null);
   }, []);
 
   const handleOpenPhotoPreview = useCallback((photos: string[], index: number) => {
@@ -735,82 +724,21 @@ export function MapView({
                       </button>
                     </div>
 
-                    <div className="mt-3 rounded-2xl bg-slate-50 p-3">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span
-                          className={`rounded-full px-2 py-1 text-xs font-bold ${
-                            getStatusInfo(timelinePlace.status).className
-                          }`}
-                        >
-                          {getStatusInfo(timelinePlace.status).label}
-                        </span>
-
-                        <div className="flex items-center gap-0.5 text-sm">
-                          {renderRating(timelinePlace.rating)}
-                        </div>
-
-                        <div className="flex flex-wrap gap-1">
-                          {timelinePlace.tags?.length > 0 ? (
-                            timelinePlace.tags.map((tag) => (
-                              <span
-                                key={tag}
-                                className="rounded-full bg-white px-2 py-0.5 text-[10px] text-slate-600"
-                              >
-                                #{tag}
-                              </span>
-                            ))
-                          ) : (
-                            <span className="text-xs text-slate-400">
-                              無標籤
-                            </span>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="mt-2 max-h-16 overflow-y-auto whitespace-pre-wrap break-words text-sm leading-5 text-slate-700">
-                        {timelinePlace.notes || "沒有地點筆記"}
-                      </div>
-                    </div>
-
                     <div className="mt-5 space-y-3">
                       {sortedTimelineVisits.map((visit) => {
                         const photos = Array.isArray(visit.photos)
                           ? visit.photos
                           : [];
-                        const visiblePhotos = photos.slice(0, TIMELINE_PHOTO_LIMIT);
-                        const hiddenPhotoCount = Math.max(
-                          0,
-                          photos.length - TIMELINE_PHOTO_LIMIT
-                        );
+                        const firstPhoto = photos[0];
+                        const secondPhoto = photos[1];
+                        const hiddenPhotoCount = Math.max(0, photos.length - 2);
 
                         return (
                           <div
                             key={visit.id}
-                            className="relative grid h-36 grid-cols-[0.9fr_1.1fr] gap-3 rounded-2xl border bg-white p-3 shadow-sm"
+                            className="grid h-36 grid-cols-[1fr_7rem] gap-3 rounded-2xl border bg-white p-3 shadow-sm"
                           >
-                            <div className="absolute right-2 top-2 z-10 flex gap-1">
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  onEditVisit(timelinePlace.id, visit.id)
-                                }
-                                className="rounded-full bg-slate-100 px-2 py-1 text-xs font-bold text-slate-700"
-                              >
-                                📝
-                              </button>
-
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  onDeleteVisit(timelinePlace.id, visit.id)
-                                }
-                                className="rounded-full bg-rose-100 px-2 py-1 text-xs font-bold text-rose-600"
-                              >
-                                🗑️
-                              </button>
-                            </div>
-
-                            <div className="min-w-0 pr-12">
+                            <div className="min-w-0">
                               <div className="flex items-center gap-2">
                                 <div className="shrink-0 text-sm font-bold text-slate-900">
                                   {formatDate(visit.visitDate)}
@@ -826,46 +754,52 @@ export function MapView({
                               </div>
                             </div>
 
-                            <div className="grid h-24 grid-cols-2 gap-2 self-center">
-                              {visiblePhotos.map((photo, index) => (
+                            <div className="grid grid-rows-2 gap-2">
+                              {firstPhoto ? (
                                 <button
-                                  key={`${photo}-${index}`}
                                   type="button"
                                   onClick={() =>
-                                    handleOpenPhotoPreview(photos, index)
+                                    handleOpenPhotoPreview(photos, 0)
                                   }
-                                  className="relative h-24 overflow-hidden rounded-xl"
+                                  className="overflow-hidden rounded-xl"
                                 >
                                   <img
-                                    src={photo}
-                                    alt={`visit-photo-${index + 1}`}
+                                    src={firstPhoto}
+                                    alt="visit-photo-1"
+                                    className="h-full w-full object-cover"
+                                  />
+                                </button>
+                              ) : (
+                                <div className="flex items-center justify-center rounded-xl bg-slate-100 text-[10px] text-slate-400">
+                                  無照片
+                                </div>
+                              )}
+
+                              {secondPhoto ? (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleOpenPhotoPreview(photos, 1)
+                                  }
+                                  className="relative overflow-hidden rounded-xl"
+                                >
+                                  <img
+                                    src={secondPhoto}
+                                    alt="visit-photo-2"
                                     className="h-full w-full object-cover"
                                   />
 
-                                  {index === 1 && hiddenPhotoCount > 0 ? (
+                                  {hiddenPhotoCount > 0 ? (
                                     <div className="absolute inset-0 flex items-center justify-center bg-black/50 text-lg font-bold text-white">
                                       +{hiddenPhotoCount}
                                     </div>
                                   ) : null}
                                 </button>
-                              ))}
-
-                              {visiblePhotos.length === 0 ? (
-                                <>
-                                  <div className="flex h-24 items-center justify-center rounded-xl bg-slate-100 text-[10px] text-slate-400">
-                                    無照片
-                                  </div>
-                                  <div className="flex h-24 items-center justify-center rounded-xl bg-slate-100 text-[10px] text-slate-400">
-                                    無照片
-                                  </div>
-                                </>
-                              ) : null}
-
-                              {visiblePhotos.length === 1 ? (
-                                <div className="flex h-24 items-center justify-center rounded-xl bg-slate-100 text-[10px] text-slate-400">
+                              ) : (
+                                <div className="flex items-center justify-center rounded-xl bg-slate-100 text-[10px] text-slate-400">
                                   無照片
                                 </div>
-                              ) : null}
+                              )}
                             </div>
                           </div>
                         );
