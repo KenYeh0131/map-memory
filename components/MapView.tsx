@@ -59,7 +59,7 @@ function renderRating(rating?: number) {
 }
 
 function getStatusInfo(status?: string) {
-  if (status === "wantToReturn" || status === "visited") {
+  if status === "wantToReturn"  {
     return {
       label: "✨ 還想去",
       className: "bg-orange-100 text-orange-600",
@@ -230,7 +230,7 @@ export function MapView({
       if (place.status === "wantToGo" && !mapFilters.showWantToGo) return false;
 
       if (
-        (place.status === "wantToReturn" || place.status === "visited") &&
+        place.status === "wantToReturn"  &&
         !mapFilters.showWantToReturn
       ) {
         return false;
