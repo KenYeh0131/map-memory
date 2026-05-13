@@ -12,6 +12,8 @@ type MapViewProps = {
   onCreatePlace: () => void;
   onEditPlace: (place: PlaceItem) => void;
   onAddVisit: (place: PlaceItem) => void;
+  onEditVisit: (placeId: string, visitId: string) => void;
+  onDeleteVisit: (placeId: string, visitId: string) => void;
 };
 
 type MapFilterState = {
@@ -138,6 +140,8 @@ export function MapView({
   onCreatePlace,
   onEditPlace,
   onAddVisit,
+  onEditVisit,
+  onDeleteVisit,
 }: MapViewProps) {
   const [mapFilters, setMapFilters] =
     useState<MapFilterState>(defaultMapFilters);
