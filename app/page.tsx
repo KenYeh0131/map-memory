@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   collection,
   deleteDoc,
@@ -50,11 +50,9 @@ export type JoinRequest = {
 
 type VisitItem = NonNullable<PlaceItem["visits"]>[number];
 
-const FALLBACK_GROUPS: MapGroup[] = [
-  { id: "family", name: "我們的回憶地圖", inviteCode: "FAMILY888" },
-];
+const FALLBACK_GROUPS: MapGroup[] = [];
 
-const DEFAULT_GROUP_ID = "family";
+const DEFAULT_GROUP_ID = "initializing";
 const CURRENT_GROUP_STORAGE_KEY = "map-memory-current-group-v1";
 const JOINED_GROUPS_STORAGE_KEY = "map-memory-joined-groups-v1";
 const DEVICE_ID_STORAGE_KEY = "map-memory-device-id-v1";
@@ -102,20 +100,13 @@ function normalizePlace(id: string, data: Partial<PlaceItem>): PlaceItem {
 
 function loadJoinedGroupIds() {
   if (typeof window === "undefined") {
-    return FALLBACK_GROUPS.map((group) => group.id);
+    return [];
   }
 
   const raw = window.localStorage.getItem(JOINED_GROUPS_STORAGE_KEY);
 
   if (!raw) {
-    const fallbackIds = FALLBACK_GROUPS.map((group) => group.id);
-
-    window.localStorage.setItem(
-      JOINED_GROUPS_STORAGE_KEY,
-      JSON.stringify(fallbackIds)
-    );
-
-    return fallbackIds;
+    return [];
   }
 
   try {
@@ -125,15 +116,11 @@ function loadJoinedGroupIds() {
       throw new Error("invalid joined groups");
     }
 
-    const validIds = parsed.filter(
+    return parsed.filter(
       (groupId) => typeof groupId === "string" && groupId.trim().length > 0
     );
-
-    return validIds.length > 0
-      ? validIds
-      : FALLBACK_GROUPS.map((group) => group.id);
   } catch {
-    return FALLBACK_GROUPS.map((group) => group.id);
+    return [];
   }
 }
 
@@ -189,7 +176,7 @@ function createInviteCode() {
 }
 
 function mergeGroups(firebaseGroups: MapGroup[]) {
-  const mergedGroups = [...FALLBACK_GROUPS];
+  const mergedGroups: MapGroup[] = [...FALLBACK_GROUPS];
 
   firebaseGroups.forEach((group) => {
     const existingIndex = mergedGroups.findIndex(
@@ -239,6 +226,7 @@ function buildVisitSummaryUpdate(visits: VisitItem[]) {
 }
 
 export default function Home() {
+  const hasCreatedInitialGroupRef = useRef(false);
   const [activeTab, setActiveTab] = useState<TabId>("map");
   const [allGroups, setAllGroups] = useState<MapGroup[]>(FALLBACK_GROUPS);
   const [joinedGroupIds, setJoinedGroupIds] = useState<string[]>(() =>
@@ -292,7 +280,7 @@ export default function Home() {
   const currentGroup =
     mapGroups.find((group) => group.id === safeCurrentGroupId) ?? mapGroups[0];
 
-  const currentGroupName = currentGroup?.name ?? "尚未選擇地圖群";
+  const currentGroupName = currentGroup?.name ?? "建立你的回憶地圖中...";
   const currentInviteCode = currentGroup?.inviteCode ?? "";
   const isGroupOwner = currentGroup?.ownerDeviceId === deviceId;
 
@@ -309,6 +297,61 @@ export default function Home() {
   );
 
   useEffect(() => {
+    if (joinedGroupIds.length > 0) {
+      return;
+    }
+
+    if (hasCreatedInitialGroupRef.current) {
+      return;
+    }
+
+    hasCreatedInitialGroupRef.current = true;
+
+    const createInitialPrivateGroup = async () => {
+      const now = new Date().toISOString();
+
+      const newGroup: MapGroup = {
+        id: createGroupId("我的回憶地圖"),
+        name: "我的回憶地圖",
+        inviteCode: createInviteCode(),
+        ownerDeviceId: deviceId,
+      };
+
+      try {
+        await setDoc(doc(db, "groups", newGroup.id), {
+          createdAt: now,
+          ownerDeviceId: deviceId,
+        });
+
+        await setDoc(doc(db, "groups", newGroup.id, "info", "meta"), {
+          name: newGroup.name,
+          inviteCode: newGroup.inviteCode,
+          ownerDeviceId: deviceId,
+          createdAt: now,
+        });
+
+        setAllGroups((prev) => mergeGroups([...prev, newGroup]));
+        setJoinedGroupIds([newGroup.id]);
+        setCurrentGroupId(newGroup.id);
+        setIsLoadingPlaces(true);
+
+        if (typeof window !== "undefined") {
+          window.localStorage.setItem(CURRENT_GROUP_STORAGE_KEY, newGroup.id);
+          window.localStorage.setItem(
+            JOINED_GROUPS_STORAGE_KEY,
+            JSON.stringify([newGroup.id])
+          );
+        }
+      } catch (error) {
+        console.error(error);
+        window.alert("建立你的私人回憶地圖失敗，請重新整理後再試");
+      }
+    };
+
+    createInitialPrivateGroup();
+  }, [deviceId, joinedGroupIds.length]);
+
+  useEffect(() => {
     const savedGroupId = window.localStorage.getItem(CURRENT_GROUP_STORAGE_KEY);
 
     if (!savedGroupId) {
@@ -321,6 +364,10 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    if (currentGroupId === DEFAULT_GROUP_ID) {
+      return;
+    }
+
     window.localStorage.setItem(CURRENT_GROUP_STORAGE_KEY, currentGroupId);
   }, [currentGroupId]);
 
