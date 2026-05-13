@@ -59,7 +59,7 @@ function renderRating(rating?: number) {
 }
 
 function getStatusInfo(status?: string) {
-  if status === "wantToReturn"  {
+  if (status === "wantToReturn")  {
     return {
       label: "✨ 還想去",
       className: "bg-orange-100 text-orange-600",
