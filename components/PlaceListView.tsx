@@ -665,7 +665,7 @@ export function PlaceListView({
                     })}
                   </div>
                 )}
-              </div>              </div>
+              </div>
             </div>
           </div>
         </div>
