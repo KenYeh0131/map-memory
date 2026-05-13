@@ -546,9 +546,9 @@ export function PlaceListView({
                       return (
                         <div
                           key={visit.id}
-                          className="relative h-56 overflow-hidden rounded-2xl border bg-white p-3 shadow-sm"
+                          className="relative grid h-36 grid-cols-[1.35fr_1fr] gap-3 rounded-2xl border bg-white p-3 shadow-sm"
                         >
-                          <div className="absolute right-2 top-2 flex gap-1">
+                          <div className="absolute right-2 top-2 z-10 flex gap-1">
                             <button
                               type="button"
                               onClick={() => onEditVisit(detailPlace.id, visit.id)}
@@ -568,51 +568,63 @@ export function PlaceListView({
                             </button>
                           </div>
 
-                          <div className="flex items-center gap-2 pr-20">
-                            <div className="shrink-0 text-sm font-bold text-slate-900">
-                              {formatDate(visit.visitDate)}
+                          <div className="min-w-0 pr-12">
+                            <div className="flex items-center gap-2">
+                              <div className="shrink-0 text-sm font-bold text-slate-900">
+                                {formatDate(visit.visitDate)}
+                              </div>
+
+                              <div className="flex items-center gap-0.5 text-xs">
+                                {renderRating(visit.rating)}
+                              </div>
                             </div>
 
-                            <div className="flex items-center gap-0.5 text-sm">
-                              {renderRating(visit.rating)}
+                            <div className="mt-2 max-h-24 overflow-y-auto whitespace-pre-wrap break-words pr-1 text-sm leading-5 text-slate-700">
+                              {visit.note || "沒有文字紀錄"}
                             </div>
                           </div>
 
-                          <div className="mt-2 h-12 overflow-hidden whitespace-pre-wrap text-sm text-slate-700">
-                            {visit.note || "沒有文字紀錄"}
+                          <div className="grid h-20 grid-cols-2 gap-2 self-center">
+                            {visiblePhotos.map((photo, index) => (
+                              <button
+                                key={`${photo}-${index}`}
+                                type="button"
+                                onClick={() =>
+                                  handleOpenPhotoPreview(photos, index)
+                                }
+                                className="relative h-20 overflow-hidden rounded-xl"
+                              >
+                                <img
+                                  src={photo}
+                                  alt={`visit-photo-${index + 1}`}
+                                  className="h-full w-full object-cover"
+                                />
+
+                                {index === 1 && hiddenPhotoCount > 0 ? (
+                                  <div className="absolute inset-0 flex items-center justify-center bg-black/50 text-lg font-bold text-white">
+                                    +{hiddenPhotoCount}
+                                  </div>
+                                ) : null}
+                              </button>
+                            ))}
+
+                            {visiblePhotos.length === 0 ? (
+                              <>
+                                <div className="flex h-20 items-center justify-center rounded-xl bg-slate-100 text-[10px] text-slate-400">
+                                  無照片
+                                </div>
+                                <div className="flex h-20 items-center justify-center rounded-xl bg-slate-100 text-[10px] text-slate-400">
+                                  無照片
+                                </div>
+                              </>
+                            ) : null}
+
+                            {visiblePhotos.length === 1 ? (
+                              <div className="flex h-20 items-center justify-center rounded-xl bg-slate-100 text-[10px] text-slate-400">
+                                無照片
+                              </div>
+                            ) : null}
                           </div>
-
-                          {photos.length > 0 ? (
-                            <div className="grid h-24 grid-cols-2 gap-2 self-center">
-                              {visiblePhotos.map((photo, index) => (
-                                <button
-                                  key={`${photo}-${index}`}
-                                  type="button"
-                                  onClick={() =>
-                                    handleOpenPhotoPreview(photos, index)
-                                  }
-                                  className="relative h-24 overflow-hidden rounded-xl"
-                                >
-                                  <img
-                                    src={photo}
-                                    alt={`visit-photo-${index + 1}`}
-                                    className="h-full w-full object-cover"
-                                  />
-
-                                  {index === 1 &&
-                                  hiddenPhotoCount > 0 ? (
-                                    <div className="absolute inset-0 flex items-center justify-center bg-black/50 text-lg font-bold text-white">
-                                      +{hiddenPhotoCount}
-                                    </div>
-                                  ) : null}
-                                </button>
-                              ))}
-                            </div>
-                          ) : (
-                            <div className="mt-3 flex h-24 items-center justify-center rounded-xl bg-slate-50 text-xs text-slate-400">
-                              沒有照片
-                            </div>
-                          )}
                         </div>
                       );
                     })}

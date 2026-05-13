@@ -740,9 +740,31 @@ export function MapView({
                         return (
                           <div
                             key={visit.id}
-                            className="grid h-36 grid-cols-[1fr_7rem] gap-3 rounded-2xl border bg-white p-3 shadow-sm"
+                            className="relative grid h-36 grid-cols-[1.35fr_1fr] gap-3 rounded-2xl border bg-white p-3 shadow-sm"
                           >
-                            <div className="min-w-0">
+                            <div className="absolute right-2 top-2 z-10 flex gap-1">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  onEditVisit(timelinePlace.id, visit.id)
+                                }
+                                className="rounded-full bg-slate-100 px-2 py-1 text-xs font-bold text-slate-700"
+                              >
+                                📝
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  onDeleteVisit(timelinePlace.id, visit.id)
+                                }
+                                className="rounded-full bg-rose-100 px-2 py-1 text-xs font-bold text-rose-600"
+                              >
+                                🗑️
+                              </button>
+                            </div>
+
+                            <div className="min-w-0 pr-12">
                               <div className="flex items-center gap-2">
                                 <div className="shrink-0 text-sm font-bold text-slate-900">
                                   {formatDate(visit.visitDate)}
@@ -758,14 +780,14 @@ export function MapView({
                               </div>
                             </div>
 
-                            <div className="grid grid-rows-2 gap-2">
+                            <div className="grid h-20 grid-cols-2 gap-2 self-center">
                               {firstPhoto ? (
                                 <button
                                   type="button"
                                   onClick={() =>
                                     handleOpenPhotoPreview(photos, 0)
                                   }
-                                  className="overflow-hidden rounded-xl"
+                                  className="relative h-20 overflow-hidden rounded-xl"
                                 >
                                   <img
                                     src={firstPhoto}
@@ -774,7 +796,7 @@ export function MapView({
                                   />
                                 </button>
                               ) : (
-                                <div className="flex items-center justify-center rounded-xl bg-slate-100 text-[10px] text-slate-400">
+                                <div className="flex h-20 items-center justify-center rounded-xl bg-slate-100 text-[10px] text-slate-400">
                                   無照片
                                 </div>
                               )}
@@ -785,7 +807,7 @@ export function MapView({
                                   onClick={() =>
                                     handleOpenPhotoPreview(photos, 1)
                                   }
-                                  className="relative overflow-hidden rounded-xl"
+                                  className="relative h-20 overflow-hidden rounded-xl"
                                 >
                                   <img
                                     src={secondPhoto}
@@ -800,7 +822,7 @@ export function MapView({
                                   ) : null}
                                 </button>
                               ) : (
-                                <div className="flex items-center justify-center rounded-xl bg-slate-100 text-[10px] text-slate-400">
+                                <div className="flex h-20 items-center justify-center rounded-xl bg-slate-100 text-[10px] text-slate-400">
                                   無照片
                                 </div>
                               )}
