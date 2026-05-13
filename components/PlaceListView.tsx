@@ -48,7 +48,7 @@ function getStatusInfo(status: PlaceStatus | string | undefined) {
 
   if (status === "memory") {
     return {
-      label: "🫧 回憶中",
+      label: "🫧 打卡完成",
       className: "bg-slate-200 text-slate-600",
       emptyEmoji: "🤍",
       emptyText: "留在回憶裡",
@@ -382,7 +382,7 @@ export function PlaceListView({
                     : "bg-slate-100 text-slate-400"
                 }`}
               >
-                🫧 回憶中
+                🫧 打卡完成
               </button>
             </div>
 

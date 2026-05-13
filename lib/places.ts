@@ -44,7 +44,7 @@ export type PlaceItem = {
 export const STATUS_LABELS: Record<PlaceStatus, string> = {
   wantToGo: "想去",
   wantToReturn: "還想去",
-  memory: "回憶中",
+  memory: "打卡完成",
 };
 
 export const STATUS_OPTIONS = [

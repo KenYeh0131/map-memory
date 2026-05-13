@@ -72,7 +72,7 @@ function getStatusInfo(status?: string) {
 
   if (status === "memory") {
     return {
-      label: "🫧 回憶中",
+      label: "🫧 打卡完成",
       className: "bg-slate-200 text-slate-600",
       emptyEmoji: "🤍",
       markerFill: "#94a3b8",
@@ -520,7 +520,7 @@ export function MapView({
                             : "bg-slate-100 text-slate-400"
                         }`}
                       >
-                        🫧 回憶中
+                        🫧 打卡完成
                       </button>
                     </div>
 

@@ -16,7 +16,7 @@ export type PlaceStatus =
 ```ts
 wantToGo      // 想去：尚未去過
 wantToReturn  // 還想去：去過，仍推薦或想再去
-memory        // 回憶中：去過，但不推薦或不想再去
+memory        // 打卡完成：去過，但不推薦或不想再去
 ```
 
 ---
