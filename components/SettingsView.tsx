@@ -75,7 +75,7 @@ export function SettingsView({
         <input
           value={nickname}
           onChange={(event) => onNicknameChange(event.target.value)}
-          placeholder="例如：Ken、太太、小王"
+          placeholder="例如：劉德華、林志玲、麥可傑克森"
           className="mt-3 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-orange-400"
           disabled={isBusy}
         />
