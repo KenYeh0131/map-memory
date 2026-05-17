@@ -7,11 +7,12 @@ import { storage } from "@/lib/firebase";
 import {
   RATING_OPTIONS,
   STATUS_OPTIONS,
+  type BestTimingItem,
   type PlaceItem,
   type PlaceStatus,
 } from "@/lib/places";
 
-const libraries: ("places")[] = ["places"];
+const libraries: "places"[] = ["places"];
 
 export type PlaceFormValues = {
   name: string;
@@ -26,6 +27,7 @@ export type PlaceFormValues = {
   tagsText: string;
   navigationTarget: string;
   notes: string;
+  bestTimings: BestTimingItem[];
 };
 
 type PlaceFormModalProps = {
@@ -47,7 +49,7 @@ const inputClassName =
 
 const labelTitleClassName = "mb-1 block font-semibold text-slate-800";
 const PLACE_PHOTO_LIMIT = 1;
-
+const MONTH_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] as const;
 
 async function compressImage(file: File): Promise<File> {
   return new Promise((resolve, reject) => {
@@ -97,9 +99,7 @@ async function compressImage(file: File): Promise<File> {
           const compressedFile = new File(
             [blob],
             file.name.replace(/\.[^.]+$/, ".webp"),
-            {
-              type: "image/webp",
-            }
+            { type: "image/webp" }
           );
 
           resolve(compressedFile);
@@ -110,7 +110,6 @@ async function compressImage(file: File): Promise<File> {
     };
 
     img.onerror = reject;
-
     reader.readAsDataURL(file);
   });
 }
@@ -124,6 +123,84 @@ function parseTags(tagsText: string) {
     .split(",")
     .map((tag) => tag.trim())
     .filter(Boolean);
+}
+
+function createBestTimingId() {
+  return `timing-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function normalizeBestTimings(bestTimings: BestTimingItem[]) {
+  return bestTimings
+    .map((item) => {
+      if (item.kind === "months") {
+        return {
+          id: item.id || createBestTimingId(),
+          kind: "months" as const,
+          title: "月份提醒",
+          note: item.note?.trim() || "",
+          months: Array.isArray(item.months)
+            ? Array.from(new Set(item.months)).sort((a, b) => a - b)
+            : [],
+        };
+      }
+
+      return {
+        id: item.id || createBestTimingId(),
+        kind: "dateRange" as const,
+        title: "日期區間提醒",
+        note: item.note?.trim() || "",
+        startDate: item.startDate ?? "",
+        endDate: item.endDate ?? "",
+      };
+    })
+    .filter((item) => {
+      if (item.kind === "months") {
+        return Array.isArray(item.months) && item.months.length > 0;
+      }
+
+      return Boolean(item.startDate || item.endDate);
+    });
+}
+
+function migrateOldBestTiming(initialPlace: PlaceItem | null): BestTimingItem[] {
+  if (!initialPlace) return [];
+
+  if (Array.isArray(initialPlace.bestTimings)) {
+    return initialPlace.bestTimings;
+  }
+
+  const oldBestTiming = initialPlace.bestTiming;
+
+  if (!oldBestTiming) return [];
+
+  const items: BestTimingItem[] = [];
+
+  if (Array.isArray(oldBestTiming.months) && oldBestTiming.months.length > 0) {
+    items.push({
+      id: createBestTimingId(),
+      kind: "months",
+      title: "適合月份",
+      note: "",
+      months: oldBestTiming.months,
+    });
+  }
+
+  if (Array.isArray(oldBestTiming.timeRanges)) {
+    oldBestTiming.timeRanges.forEach((range) => {
+      if (range.start || range.end) {
+        items.push({
+          id: createBestTimingId(),
+          kind: "dateRange",
+          title: "適合期間",
+          note: "",
+          startDate: range.start,
+          endDate: range.end,
+        });
+      }
+    });
+  }
+
+  return items;
 }
 
 function buildInitialValues(initialPlace: PlaceItem | null): PlaceFormValues {
@@ -140,6 +217,7 @@ function buildInitialValues(initialPlace: PlaceItem | null): PlaceFormValues {
     tagsText: initialPlace?.tags.join(", ") ?? "",
     navigationTarget: initialPlace?.navigationTarget ?? "",
     notes: initialPlace?.notes ?? "",
+    bestTimings: migrateOldBestTiming(initialPlace),
   };
 }
 
@@ -153,7 +231,6 @@ export function PlaceFormModal({
 }: PlaceFormModalProps) {
   const addressAutocompleteRef =
     useRef<google.maps.places.Autocomplete | null>(null);
-
   const navigationAutocompleteRef =
     useRef<google.maps.places.Autocomplete | null>(null);
 
@@ -166,11 +243,9 @@ export function PlaceFormModal({
   });
 
   const [previewPhoto, setPreviewPhoto] = useState<PhotoPreviewState>(null);
-
   const [formValues, setFormValues] = useState<PlaceFormValues>(() =>
     buildInitialValues(initialPlace)
   );
-
   const [newTagText, setNewTagText] = useState("");
   const [errors, setErrors] = useState<{ name?: string; address?: string }>({});
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
@@ -203,6 +278,80 @@ export function PlaceFormModal({
     setFormValues((prev) => ({ ...prev, [key]: value }));
   };
 
+  const handleAddMonthTiming = () => {
+    setFormValues((prev) => ({
+      ...prev,
+      bestTimings: [
+        ...prev.bestTimings,
+        {
+          id: createBestTimingId(),
+          kind: "months",
+          title: "月份提醒",
+          note: "",
+          months: [],
+        },
+      ],
+    }));
+  };
+
+  const handleAddDateRangeTiming = () => {
+    setFormValues((prev) => ({
+      ...prev,
+      bestTimings: [
+        ...prev.bestTimings,
+        {
+          id: createBestTimingId(),
+          kind: "dateRange",
+          title: "日期區間提醒",
+          note: "",
+          startDate: "",
+          endDate: "",
+        },
+      ],
+    }));
+  };
+
+  const updateBestTimingItem = <K extends keyof BestTimingItem>(
+    timingId: string,
+    key: K,
+    value: BestTimingItem[K]
+  ) => {
+    setFormValues((prev) => ({
+      ...prev,
+      bestTimings: prev.bestTimings.map((item) =>
+        item.id === timingId ? { ...item, [key]: value } : item
+      ),
+    }));
+  };
+
+  const deleteBestTimingItem = (timingId: string) => {
+    setFormValues((prev) => ({
+      ...prev,
+      bestTimings: prev.bestTimings.filter((item) => item.id !== timingId),
+    }));
+  };
+
+  const toggleBestTimingMonth = (timingId: string, month: number) => {
+    setFormValues((prev) => ({
+      ...prev,
+      bestTimings: prev.bestTimings.map((item) => {
+        if (item.id !== timingId || item.kind !== "months") {
+          return item;
+        }
+
+        const currentMonths = Array.isArray(item.months) ? item.months : [];
+        const nextMonths = currentMonths.includes(month)
+          ? currentMonths.filter((targetMonth) => targetMonth !== month)
+          : [...currentMonths, month].sort((a, b) => a - b);
+
+        return {
+          ...item,
+          months: nextMonths,
+        };
+      }),
+    }));
+  };
+
   const handleAddressPlaceChanged = () => {
     const place = addressAutocompleteRef.current?.getPlace();
 
@@ -221,8 +370,6 @@ export function PlaceFormModal({
 
     setFormValues((prev) => ({
       ...prev,
-      name: prev.name,
-      address: prev.address,
       navigationTarget:
         place.name
           ?.replace(/[^\u4e00-\u9fa5（）()、・．.－\-\s]/g, "")
@@ -242,10 +389,6 @@ export function PlaceFormModal({
 
     setFormValues((prev) => ({
       ...prev,
-      name: prev.name,
-      address: prev.address,
-      lat: prev.lat,
-      lng: prev.lng,
       navigationTarget:
         place.name
           ?.replace(/[^\u4e00-\u9fa5（）()、・．.－\-\s]/g, "")
@@ -258,7 +401,7 @@ export function PlaceFormModal({
       ...prev,
       status: nextStatus,
       completedDate:
-      nextStatus === "wantToReturn" ? prev.completedDate || todayText() : "",
+        nextStatus === "wantToReturn" ? prev.completedDate || todayText() : "",
     }));
   };
 
@@ -316,6 +459,7 @@ export function PlaceFormModal({
       coverPhotoIndex: safeCoverPhotoIndex,
       completedDate:
         formValues.status === "wantToReturn" ? formValues.completedDate : "",
+      bestTimings: normalizeBestTimings(formValues.bestTimings),
     });
   };
 
@@ -409,9 +553,10 @@ export function PlaceFormModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/50 p-3">
-      <div className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-4 shadow-2xl">
-        <div className="mb-3 flex items-center justify-between">
+    <div className="fixed inset-0 z-[200] flex items-end justify-center bg-slate-900/50 p-3">
+      <div className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-md flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+        <div className="shrink-0 p-4 pb-2">
+          <div className="mb-3 flex items-center justify-between">
           <h2 className="text-lg font-bold text-slate-900">{title}</h2>
 
           <button
@@ -421,9 +566,11 @@ export function PlaceFormModal({
           >
             關閉
           </button>
-        </div>
+            </div>
+          </div>
 
-        <div className="space-y-3 text-slate-800">
+        <div className="flex-1 overflow-y-auto px-4 pb-4">
+         <div className="space-y-3 text-slate-800">
           <label className="block text-sm">
             <span className={labelTitleClassName}>
               地點名稱
@@ -552,22 +699,182 @@ export function PlaceFormModal({
             </select>
           </label>
 
+          <div className="rounded-xl border border-orange-200 bg-orange-50 p-3 text-sm">
+            <div className="mb-2">
+              <div className="font-bold text-slate-900">適合期間提醒</div>
+              <div className="mt-0.5 text-xs text-slate-600">
+                可設定多個月份或日期區間；符合期間時，地圖地標會高亮提醒。
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={handleAddMonthTiming}
+                className="rounded-xl bg-orange-500 px-3 py-2 text-xs font-bold text-white"
+              >
+                ＋新增月份提醒
+              </button>
+
+              <button
+                type="button"
+                onClick={handleAddDateRangeTiming}
+                className="rounded-xl bg-amber-500 px-3 py-2 text-xs font-bold text-white"
+              >
+                ＋新增日期區間
+              </button>
+            </div>
+
+            {formValues.bestTimings.length === 0 ? (
+              <div className="mt-3 rounded-xl bg-white px-3 py-2 text-xs font-medium text-slate-500">
+                尚未設定適合期間。
+              </div>
+            ) : (
+              <div className="mt-3 space-y-3">
+                {formValues.bestTimings.map((timing, index) => (
+                  <div
+                    key={timing.id}
+                    className="rounded-xl border border-orange-100 bg-white p-3 shadow-sm"
+                  >
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <div className="text-xs font-bold text-orange-600">
+                        {timing.kind === "months"
+                          ? `月份提醒 #${index + 1}`
+                          : `日期區間 #${index + 1}`}
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => deleteBestTimingItem(timing.id)}
+                        className="rounded-full bg-rose-50 px-2 py-1 text-xs font-bold text-rose-600"
+                      >
+                        刪除
+                      </button>
+                    </div>
+
+                    {timing.kind === "months" ? (
+                      <div>
+                        <div className="mb-1 text-xs font-semibold text-slate-700">
+                          適合月份
+                        </div>
+
+                        <div className="grid grid-cols-6 gap-1.5">
+                          {MONTH_OPTIONS.map((month) => {
+                            const checked = timing.months?.includes(month);
+
+                            return (
+                              <button
+                                key={month}
+                                type="button"
+                                onClick={() =>
+                                  toggleBestTimingMonth(timing.id, month)
+                                }
+                                className={`rounded-lg border px-2 py-1.5 text-xs font-bold ${
+                                  checked
+                                    ? "border-orange-500 bg-orange-500 text-white"
+                                    : "border-slate-200 bg-white text-slate-600"
+                                }`}
+                              >
+                                {month}月
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-2 gap-2">
+                        <label className="block">
+                          <span className="mb-1 block text-xs font-semibold text-slate-700">
+                            開始日期
+                          </span>
+
+                          <input
+                            type="date"
+                            value={timing.startDate ?? ""}
+                            onChange={(event) =>
+                              updateBestTimingItem(
+                                timing.id,
+                                "startDate",
+                                event.target.value
+                              )
+                            }
+                            className={inputClassName}
+                          />
+                        </label>
+
+                        <label className="block">
+                          <span className="mb-1 block text-xs font-semibold text-slate-700">
+                            結束日期
+                          </span>
+
+                          <input
+                            type="date"
+                            value={timing.endDate ?? ""}
+                            onChange={(event) =>
+                              updateBestTimingItem(
+                                timing.id,
+                                "endDate",
+                                event.target.value
+                              )
+                            }
+                            className={inputClassName}
+                          />
+                        </label>
+                      </div>
+                    )}
+
+                    <label className="mt-3 block">
+                      <span className="mb-1 block text-xs font-semibold text-slate-700">
+                        提醒文字
+                      </span>
+
+                      <input
+                        value={timing.note ?? ""}
+                        onChange={(event) =>
+                          updateBestTimingItem(
+                            timing.id,
+                            "note",
+                            event.target.value
+                          )
+                        }
+                        placeholder="例如：現在最漂亮、建議傍晚去、退潮時比較適合"
+                        className={inputClassName}
+                      />
+                    </label>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           <div className="block text-sm">
             <span className={labelTitleClassName}>地點照片（最多 1 張）</span>
 
-            <input
-              type="file"
-              accept="image/*"
-              disabled={isUploadingPhoto || formValues.photos.length >= PLACE_PHOTO_LIMIT}
-              onChange={(event) => {
-                handlePhotoUpload(event.target.files).catch(() => {
-                  window.alert("照片讀取失敗，請重新上傳");
-                });
+            <label
+  className={`inline-flex cursor-pointer items-center justify-center rounded-lg px-4 py-2 text-sm font-bold text-white ${
+    isUploadingPhoto || formValues.photos.length >= PLACE_PHOTO_LIMIT
+      ? "bg-slate-300"
+      : "bg-orange-500 hover:bg-orange-600"
+  }`}
+>
+  選擇檔案
 
-                event.target.value = "";
-              }}
-              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-900 opacity-100 file:mr-3 file:rounded-md file:border-0 file:bg-slate-900 file:px-3 file:py-1.5 file:text-sm file:font-semibold file:text-white disabled:opacity-70"
-            />
+  <input
+    type="file"
+    accept="image/*"
+    disabled={
+      isUploadingPhoto || formValues.photos.length >= PLACE_PHOTO_LIMIT
+    }
+    onChange={(event) => {
+      handlePhotoUpload(event.target.files).catch(() => {
+        window.alert("照片讀取失敗，請重新上傳");
+      });
+
+      event.target.value = "";
+    }}
+    className="hidden"
+  />
+</label>
 
             <p className="mt-1 text-xs font-medium text-slate-600">
               {isUploadingPhoto
@@ -740,13 +1047,15 @@ export function PlaceFormModal({
               className={inputClassName}
             />
           </label>
-        </div>
+          </div>
+</div>
 
-        <button
-          type="button"
-          onClick={handleValidateAndSubmit}
+<div className="shrink-0 border-t border-slate-100 bg-white p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+  <button
+    type="button"
+    onClick={handleValidateAndSubmit}
           disabled={isUploadingPhoto}
-          className="mt-4 w-full rounded-lg bg-orange-500 px-3 py-3 text-sm font-bold text-white disabled:bg-slate-400"
+          className="w-full rounded-lg bg-orange-500 px-3 py-3 text-sm font-bold text-white shadow-lg disabled:bg-slate-400"
         >
           {isUploadingPhoto
             ? "照片上傳中..."
@@ -758,7 +1067,7 @@ export function PlaceFormModal({
 
       {previewPhoto ? (
         <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/80 p-4"
+          className="fixed inset-0 z-[220] flex items-center justify-center bg-slate-900/80 p-4"
           onClick={closePreview}
         >
           <div
@@ -810,6 +1119,7 @@ export function PlaceFormModal({
           </div>
         </div>
       ) : null}
+      </div>
     </div>
   );
 }

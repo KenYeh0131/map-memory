@@ -156,153 +156,161 @@ export function VisitFormModal({
   };
 
   return (
-    <div className="fixed inset-0 z-[80] flex items-end justify-center bg-black/50 p-3">
-      <div className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-3xl bg-white p-4 shadow-2xl">
-        <div className="mb-4 flex items-center justify-between">
-          <div>
-            <h2 className="text-lg font-bold text-slate-900">
-              {mode === "edit" ? "編輯回憶" : "加入回憶"}
-            </h2>
+    <div className="fixed inset-0 z-[300] flex items-end justify-center bg-black/50 px-3 pb-[calc(6rem+env(safe-area-inset-bottom,0px))] pt-3">
+      <div className="flex max-h-[calc(100dvh-7rem)] w-full max-w-md flex-col overflow-hidden rounded-3xl bg-white shadow-2xl">
+        <div className="shrink-0 border-b border-slate-100 bg-white p-4 pb-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <h2 className="text-lg font-bold text-slate-900">
+                {mode === "edit" ? "編輯回憶" : "加入回憶"}
+              </h2>
 
-            <p className="mt-1 text-xs text-slate-500">{placeName}</p>
+              <p className="mt-1 truncate text-xs text-slate-500">
+                {placeName}
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={onClose}
+              className="shrink-0 rounded-full bg-slate-100 px-3 py-1.5 text-sm"
+            >
+              ✕
+            </button>
           </div>
-
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-full bg-slate-100 px-3 py-1.5 text-sm"
-          >
-            ✕
-          </button>
         </div>
 
-        <div className="space-y-4">
-          <label className="block text-sm">
-            <span className="mb-1 block font-semibold text-slate-800">
-              拜訪日期
-            </span>
-
-            <input
-              type="date"
-              value={visitDate}
-              max={todayText()}
-              onChange={(event) => setVisitDate(event.target.value)}
-              className="w-full rounded-xl border border-slate-300 px-3 py-2"
-            />
-
-            <p className="mt-1 text-xs text-slate-500">
-              只能記錄今天以前已發生的回憶
-            </p>
-          </label>
-
-          <label className="block text-sm">
-            <span className="mb-1 block font-semibold text-slate-800">
-              這次的回憶
-            </span>
-
-            <textarea
-              value={note}
-              onChange={(event) => setNote(event.target.value)}
-              rows={4}
-              placeholder="記錄這次去的感受、發生的事、想留下的回憶..."
-              className="w-full rounded-xl border border-slate-300 px-3 py-2"
-            />
-          </label>
-
-          <label className="block text-sm">
-            <span className="mb-1 block font-semibold text-slate-800">
-              這次喜歡程度
-            </span>
-
-            <select
-              value={rating}
-              onChange={(event) => setRating(Number(event.target.value))}
-              className="w-full rounded-xl border border-slate-300 px-3 py-2"
-            >
-              {RATING_OPTIONS.map((option) => (
-                <option key={option} value={option}>
-                  {option} 顆心
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <div>
-            <span className="mb-1 block text-sm font-semibold text-slate-800">
-              回憶照片
-            </span>
-
-            <label className="flex cursor-pointer items-center justify-center rounded-2xl border-2 border-dashed border-orange-300 bg-orange-50 px-4 py-6 text-center hover:bg-orange-100">
-              <div>
-                <div className="text-3xl">📸</div>
-
-                <div className="mt-2 text-sm font-bold text-orange-600">
-                  {isUploading ? "照片上傳中..." : "新增回憶照片"}
-                </div>
-
-                <div className="mt-1 text-xs text-slate-500">
-                  最多 {MAX_PHOTOS} 張
-                </div>
-              </div>
+        <div className="flex-1 overflow-y-auto px-4 py-4">
+          <div className="space-y-4">
+            <label className="block text-sm">
+              <span className="mb-1 block font-semibold text-slate-800">
+                拜訪日期
+              </span>
 
               <input
-                type="file"
-                accept="image/*"
-                multiple
-                disabled={isUploading}
-                onChange={(event) => {
-                  handlePhotoUpload(event.target.files);
-                  event.target.value = "";
-                }}
-                className="hidden"
+                type="date"
+                value={visitDate}
+                max={todayText()}
+                onChange={(event) => setVisitDate(event.target.value)}
+                className="w-full rounded-xl border border-slate-300 px-3 py-2"
+              />
+
+              <p className="mt-1 text-xs text-slate-500">
+                只能記錄今天以前已發生的回憶
+              </p>
+            </label>
+
+            <label className="block text-sm">
+              <span className="mb-1 block font-semibold text-slate-800">
+                這次的回憶
+              </span>
+
+              <textarea
+                value={note}
+                onChange={(event) => setNote(event.target.value)}
+                rows={4}
+                placeholder="記錄這次去的感受、發生的事、想留下的回憶..."
+                className="w-full rounded-xl border border-slate-300 px-3 py-2"
               />
             </label>
 
-            {photos.length > 0 ? (
-              <div className="mt-3 grid grid-cols-4 gap-2">
-                {previewPhotos.map((photo, index) => (
-                  <div
-                    key={`${photo}-${index}`}
-                    className="relative overflow-hidden rounded-xl"
-                  >
-                    <img
-                      src={photo}
-                      alt={`visit-photo-${index + 1}`}
-                      className="h-24 w-full object-cover"
-                    />
+            <label className="block text-sm">
+              <span className="mb-1 block font-semibold text-slate-800">
+                這次喜歡程度
+              </span>
 
-                    <button
-                      type="button"
-                      onClick={() => handleRemovePhoto(photo)}
-                      className="absolute right-1 top-1 rounded-full bg-black/60 px-1.5 py-0.5 text-[10px] font-bold text-white"
-                    >
-                      ✕
-                    </button>
-                  </div>
+              <select
+                value={rating}
+                onChange={(event) => setRating(Number(event.target.value))}
+                className="w-full rounded-xl border border-slate-300 px-3 py-2"
+              >
+                {RATING_OPTIONS.map((option) => (
+                  <option key={option} value={option}>
+                    {option} 顆心
+                  </option>
                 ))}
+              </select>
+            </label>
 
-                {remainPhotoCount > 0 ? (
-                  <div className="flex h-24 items-center justify-center rounded-xl bg-slate-200 text-lg font-bold text-slate-700">
-                    +{remainPhotoCount}
+            <div>
+              <span className="mb-1 block text-sm font-semibold text-slate-800">
+                回憶照片
+              </span>
+
+              <label className="flex cursor-pointer items-center justify-center rounded-2xl border-2 border-dashed border-orange-300 bg-orange-50 px-4 py-6 text-center hover:bg-orange-100">
+                <div>
+                  <div className="text-3xl">📸</div>
+
+                  <div className="mt-2 text-sm font-bold text-orange-600">
+                    {isUploading ? "照片上傳中..." : "新增回憶照片"}
                   </div>
-                ) : null}
-              </div>
-            ) : null}
+
+                  <div className="mt-1 text-xs text-slate-500">
+                    最多 {MAX_PHOTOS} 張
+                  </div>
+                </div>
+
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  disabled={isUploading}
+                  onChange={(event) => {
+                    handlePhotoUpload(event.target.files);
+                    event.target.value = "";
+                  }}
+                  className="hidden"
+                />
+              </label>
+
+              {photos.length > 0 ? (
+                <div className="mt-3 grid grid-cols-4 gap-2">
+                  {previewPhotos.map((photo, index) => (
+                    <div
+                      key={`${photo}-${index}`}
+                      className="relative overflow-hidden rounded-xl"
+                    >
+                      <img
+                        src={photo}
+                        alt={`visit-photo-${index + 1}`}
+                        className="h-24 w-full object-cover"
+                      />
+
+                      <button
+                        type="button"
+                        onClick={() => handleRemovePhoto(photo)}
+                        className="absolute right-1 top-1 rounded-full bg-black/60 px-1.5 py-0.5 text-[10px] font-bold text-white"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+
+                  {remainPhotoCount > 0 ? (
+                    <div className="flex h-24 items-center justify-center rounded-xl bg-slate-200 text-lg font-bold text-slate-700">
+                      +{remainPhotoCount}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={handleSubmit}
-          disabled={isUploading || isSaving}
-          className="mt-5 w-full rounded-2xl bg-orange-500 px-4 py-3 text-sm font-bold text-white disabled:bg-slate-400"
-        >
-          {isSaving
-            ? "儲存中..."
-            : mode === "edit"
-            ? "更新回憶"
-            : "儲存回憶"}
-        </button>
+        <div className="shrink-0 border-t border-slate-100 bg-white p-4">
+          <button
+            type="button"
+            onClick={handleSubmit}
+            disabled={isUploading || isSaving}
+            className="w-full rounded-2xl bg-orange-500 px-4 py-3 text-sm font-bold text-white shadow-lg disabled:bg-slate-400"
+          >
+            {isSaving
+              ? "儲存中..."
+              : mode === "edit"
+              ? "更新回憶"
+              : "儲存回憶"}
+          </button>
+        </div>
       </div>
     </div>
   );

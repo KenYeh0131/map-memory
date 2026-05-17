@@ -8,6 +8,19 @@ export type VisitItem = {
   rating?: number;
   companions?: string[];
   createdAt: string;
+  updatedAt?: string;
+};
+
+export type BestTimingKind = "months" | "dateRange";
+
+export type BestTimingItem = {
+  id: string;
+  kind: BestTimingKind;
+  title: string;
+  note?: string;
+  months?: number[];
+  startDate?: string;
+  endDate?: string;
 };
 
 export type BestTiming = {
@@ -36,7 +49,19 @@ export type PlaceItem = {
   visitCount: number;
   firstVisitedAt?: string;
   lastVisitedAt?: string;
+
+  /**
+   * 舊版單一適合期間欄位。
+   * 保留是為了相容舊資料，後續主要使用 bestTimings。
+   */
   bestTiming?: BestTiming;
+
+  /**
+   * 新版多筆適合期間提醒。
+   * 可同時設定多個月份提醒或日期區間提醒。
+   */
+  bestTimings?: BestTimingItem[];
+
   createdAt: string;
   updatedAt: string;
 };
@@ -72,6 +97,7 @@ export const defaultPlacesSeed: PlaceItem[] = [
     lng: 121.4104,
     visits: [],
     visitCount: 0,
+    bestTimings: [],
     createdAt: now,
     updatedAt: now,
   },

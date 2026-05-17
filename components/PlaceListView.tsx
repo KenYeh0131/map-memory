@@ -2,7 +2,7 @@
 
 import { useCallback, useMemo, useState } from "react";
 import { openGoogleMapsDirections } from "@/lib/navigation";
-import type { PlaceItem, PlaceStatus } from "@/lib/places";
+import type { BestTimingItem, PlaceItem, PlaceStatus } from "@/lib/places";
 
 export type PlaceFilters = {
   keyword: string;
@@ -28,12 +28,225 @@ type PhotoPreviewState = {
   index: number;
 } | null;
 
+type TimingDisplayInfo = {
+  hasTiming: boolean;
+  isActive: boolean;
+  detailText: string;
+};
+
+type StatusFilterState = {
+  showWantToGo: boolean;
+  showWantToReturn: boolean;
+  showMemory: boolean;
+};
+
 const RATING_CHIPS = [0, 1, 2, 3, 4, 5] as const;
 const TIMELINE_PHOTO_LIMIT = 2;
+
+const defaultStatusFilters: StatusFilterState = {
+  showWantToGo: true,
+  showWantToReturn: true,
+  showMemory: true,
+};
 
 function formatDate(dateText?: string) {
   if (!dateText) return "";
   return dateText.replaceAll("-", "/");
+}
+
+function formatShortDate(dateText?: string) {
+  if (!dateText) return "";
+
+  const parts = dateText.split("-");
+  if (parts.length !== 3) return formatDate(dateText);
+
+  const month = Number(parts[1]);
+  const day = Number(parts[2]);
+
+  if (!month || !day) return formatDate(dateText);
+
+  return `${month}/${day}`;
+}
+
+function getTodayDateText() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function getCurrentMonth(today: string) {
+  return Number(today.slice(5, 7));
+}
+
+function isDateInRange(today: string, startDate?: string, endDate?: string) {
+  if (startDate && today < startDate) return false;
+  if (endDate && today > endDate) return false;
+  return true;
+}
+
+function getNearestMonth(months: number[] | undefined, today: string) {
+  if (!Array.isArray(months) || months.length === 0) return null;
+
+  const currentMonth = getCurrentMonth(today);
+  const sortedMonths = Array.from(new Set(months))
+    .filter((month) => month >= 1 && month <= 12)
+    .sort((a, b) => a - b);
+
+  if (sortedMonths.length === 0) return null;
+
+  return sortedMonths.find((month) => month >= currentMonth) ?? sortedMonths[0];
+}
+
+function getMonthText(months: number[] | undefined, today: string) {
+  const nearestMonth = getNearestMonth(months, today);
+
+  if (!nearestMonth) return "";
+
+  return `${nearestMonth}月`;
+}
+
+function getDateRangeText(item: BestTimingItem) {
+  if (item.startDate && item.endDate) {
+    return `${formatShortDate(item.startDate)}~${formatShortDate(item.endDate)}`;
+  }
+
+  if (item.startDate) {
+    return `${formatShortDate(item.startDate)} 起`;
+  }
+
+  if (item.endDate) {
+    return `${formatShortDate(item.endDate)} 前`;
+  }
+
+  return "";
+}
+
+function isTimingItemActive(item: BestTimingItem, today: string) {
+  if (item.kind === "months") {
+    const months = Array.isArray(item.months) ? item.months : [];
+
+    if (months.length === 0) return false;
+
+    return months.includes(getCurrentMonth(today));
+  }
+
+  return isDateInRange(today, item.startDate, item.endDate);
+}
+
+function getTimingItemSortValue(item: BestTimingItem, today: string) {
+  if (item.kind === "dateRange") {
+    if (item.startDate && item.startDate >= today) return item.startDate;
+    if (item.endDate && item.endDate >= today) return item.endDate;
+    return "9999-12-31";
+  }
+
+  const nearestMonth = getNearestMonth(item.months, today);
+
+  if (!nearestMonth) return "9999-12-31";
+
+  const currentMonth = getCurrentMonth(today);
+  const sortMonth =
+    nearestMonth >= currentMonth ? nearestMonth : nearestMonth + 12;
+
+  return `${String(sortMonth).padStart(2, "0")}`;
+}
+
+function getTimingPeriodText(item: BestTimingItem, today: string) {
+  if (item.kind === "months") {
+    return getMonthText(item.months, today);
+  }
+
+  return getDateRangeText(item);
+}
+
+function getTimingDisplayText(item: BestTimingItem, today: string) {
+  const periodText = getTimingPeriodText(item, today);
+  const note = item.note?.trim() ?? "";
+
+  if (periodText && note) {
+    return `最近適合去：${periodText}　${note}`;
+  }
+
+  if (periodText) {
+    return `最近適合去：${periodText}`;
+  }
+
+  if (note) {
+    return `最近適合去：${note}`;
+  }
+
+  return "最近適合去";
+}
+
+function getNormalizedBestTimings(place: PlaceItem): BestTimingItem[] {
+  const newTimings = Array.isArray(place.bestTimings)
+    ? place.bestTimings
+    : [];
+
+  if (newTimings.length > 0) {
+    return newTimings;
+  }
+
+  const oldBestTiming = place.bestTiming;
+  const oldItems: BestTimingItem[] = [];
+
+  if (oldBestTiming?.months?.length) {
+    oldItems.push({
+      id: "legacy-months",
+      kind: "months",
+      title: "適合月份",
+      months: oldBestTiming.months,
+    });
+  }
+
+  if (oldBestTiming?.timeRanges?.length) {
+    oldBestTiming.timeRanges.forEach((range, index) => {
+      oldItems.push({
+        id: `legacy-range-${index}`,
+        kind: "dateRange",
+        title: "適合期間",
+        startDate: range.start,
+        endDate: range.end,
+      });
+    });
+  }
+
+  return oldItems;
+}
+
+function getTimingDisplayInfo(
+  place: PlaceItem,
+  today: string
+): TimingDisplayInfo {
+  const timings = getNormalizedBestTimings(place);
+
+  if (timings.length === 0) {
+    return {
+      hasTiming: false,
+      isActive: false,
+      detailText: "",
+    };
+  }
+
+  const activeTiming = timings.find((item) => isTimingItemActive(item, today));
+
+  if (activeTiming) {
+    return {
+      hasTiming: true,
+      isActive: true,
+      detailText: getTimingDisplayText(activeTiming, today),
+    };
+  }
+
+  const nextTiming = [...timings].sort((a, b) =>
+    getTimingItemSortValue(a, today).localeCompare(
+      getTimingItemSortValue(b, today)
+    )
+  )[0];
+
+  return {
+    hasTiming: true,
+    isActive: false,
+    detailText: nextTiming ? getTimingDisplayText(nextTiming, today) : "",
+  };
 }
 
 function getStatusInfo(status: PlaceStatus | string | undefined) {
@@ -50,7 +263,7 @@ function getStatusInfo(status: PlaceStatus | string | undefined) {
     return {
       label: "🫧 打卡完成",
       className: "bg-slate-200 text-slate-600",
-      emptyEmoji: "🤍",
+      emptyEmoji: "🎞️",
       emptyText: "留在回憶裡",
     };
   }
@@ -58,7 +271,7 @@ function getStatusInfo(status: PlaceStatus | string | undefined) {
   return {
     label: "♥ 想去",
     className: "bg-red-100 text-red-600",
-    emptyEmoji: "🥺",
+    emptyEmoji: "😍",
     emptyText: "好想去~",
   };
 }
@@ -86,8 +299,12 @@ export function PlaceListView({
   onDeleteVisit,
 }: PlaceListViewProps) {
   const [detailPlaceId, setDetailPlaceId] = useState<string | null>(null);
+  const [statusFilters, setStatusFilters] =
+    useState<StatusFilterState>(defaultStatusFilters);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [photoPreview, setPhotoPreview] = useState<PhotoPreviewState>(null);
+
+  const todayText = useMemo(() => getTodayDateText(), []);
 
   const selectedTags = useMemo(() => {
     return Array.isArray(filters.tags) ? filters.tags : [];
@@ -108,6 +325,18 @@ export function PlaceListView({
     return places.find((place) => place.id === detailPlaceId) ?? null;
   }, [places, detailPlaceId]);
 
+  const detailTimingInfo = useMemo(() => {
+    if (!detailPlace) {
+      return {
+        hasTiming: false,
+        isActive: false,
+        detailText: "",
+      };
+    }
+
+    return getTimingDisplayInfo(detailPlace, todayText);
+  }, [detailPlace, todayText]);
+
   const sortedVisits = useMemo(() => {
     if (!detailPlace?.visits) return [];
 
@@ -116,14 +345,44 @@ export function PlaceListView({
     );
   }, [detailPlace?.visits]);
 
+  const visiblePlaces = useMemo(() => {
+    return places.filter((place) => {
+      if (place.status === "wantToGo" && !statusFilters.showWantToGo) {
+        return false;
+      }
+
+      if (place.status === "wantToReturn" && !statusFilters.showWantToReturn) {
+        return false;
+      }
+
+      if (place.status === "memory" && !statusFilters.showMemory) {
+        return false;
+      }
+
+      return true;
+    });
+  }, [places, statusFilters]);
+
   const hasActiveFilters = useMemo(() => {
+    const hasStatusFilter =
+      !statusFilters.showWantToGo ||
+      !statusFilters.showWantToReturn ||
+      !statusFilters.showMemory;
+
     return (
       filters.keyword.trim().length > 0 ||
       filters.status !== "all" ||
       filters.minRating !== "all" ||
-      selectedTags.length > 0
+      selectedTags.length > 0 ||
+      hasStatusFilter
     );
-  }, [filters.keyword, filters.status, filters.minRating, selectedTags.length]);
+  }, [
+    filters.keyword,
+    filters.status,
+    filters.minRating,
+    selectedTags.length,
+    statusFilters,
+  ]);
 
   const updateFilters = useCallback(
     (next: PlaceFilters) => {
@@ -161,15 +420,19 @@ export function PlaceListView({
     [filters, updateFilters]
   );
 
-  const handleStatusChange = useCallback(
-    (status: "all" | PlaceStatus) => {
-      updateFilters({
-        ...filters,
-        status: filters.status === status ? "all" : status,
-      });
-    },
-    [filters, updateFilters]
-  );
+  const handleStatusChange = useCallback((status: PlaceStatus) => {
+    setStatusFilters((prev) => {
+      if (status === "wantToGo") {
+        return { ...prev, showWantToGo: !prev.showWantToGo };
+      }
+
+      if (status === "wantToReturn") {
+        return { ...prev, showWantToReturn: !prev.showWantToReturn };
+      }
+
+      return { ...prev, showMemory: !prev.showMemory };
+    });
+  }, []);
 
   const handleMinRatingChange = useCallback(
     (rating: number) => {
@@ -250,7 +513,7 @@ export function PlaceListView({
           className="flex w-full justify-between text-left"
         >
           <span className="font-bold">
-            地點清單 ({places.length})
+            地點清單 ({visiblePlaces.length})
             {hasActiveFilters ? " · 已篩選" : ""}
           </span>
 
@@ -264,7 +527,7 @@ export function PlaceListView({
                 type="button"
                 onClick={() => handleStatusChange("wantToGo")}
                 className={`rounded-xl px-2 py-2 text-xs font-bold ${
-                  filters.status === "wantToGo"
+                  statusFilters.showWantToGo
                     ? "bg-red-100 text-red-600"
                     : "bg-slate-100 text-slate-400"
                 }`}
@@ -276,7 +539,7 @@ export function PlaceListView({
                 type="button"
                 onClick={() => handleStatusChange("wantToReturn")}
                 className={`rounded-xl px-2 py-2 text-xs font-bold ${
-                  filters.status === "wantToReturn"
+                  statusFilters.showWantToReturn
                     ? "bg-orange-100 text-orange-600"
                     : "bg-slate-100 text-slate-400"
                 }`}
@@ -288,7 +551,7 @@ export function PlaceListView({
                 type="button"
                 onClick={() => handleStatusChange("memory")}
                 className={`rounded-xl px-2 py-2 text-xs font-bold ${
-                  filters.status === "memory"
+                  statusFilters.showMemory
                     ? "bg-slate-300 text-slate-700"
                     : "bg-slate-100 text-slate-400"
                 }`}
@@ -345,22 +608,25 @@ export function PlaceListView({
         ) : null}
       </div>
 
-      {places.length === 0 ? (
+      {visiblePlaces.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500">
           沒有符合條件的地點。
         </div>
       ) : (
-        places.map((place) => {
+        visiblePlaces.map((place) => {
           const coverIndex = place.coverPhotoIndex ?? 0;
           const coverPhoto = place.photos?.[coverIndex] ?? place.photos?.[0];
           const statusInfo = getStatusInfo(place.status);
           const lastVisitedText = formatDate(place.lastVisitedAt);
+          const timingInfo = getTimingDisplayInfo(place, todayText);
 
           return (
             <article
               key={place.id}
               onClick={() => handleOpenDetail(place.id)}
-              className="cursor-pointer overflow-hidden rounded-2xl bg-white shadow"
+              className={`cursor-pointer overflow-hidden rounded-2xl bg-white shadow ${
+                timingInfo.isActive ? "ring-2 ring-amber-300" : ""
+              }`}
             >
               <div className="flex items-stretch">
                 <div className="w-32 shrink-0 overflow-hidden bg-slate-100">
@@ -399,6 +665,18 @@ export function PlaceListView({
                       {statusInfo.label}
                     </div>
                   </div>
+
+                  {timingInfo.hasTiming ? (
+                    <div
+                      className={`mt-2 rounded-xl px-2 py-1.5 text-[11px] font-semibold ${
+                        timingInfo.isActive
+                          ? "bg-amber-50 text-amber-700"
+                          : "bg-slate-50 text-slate-500"
+                      }`}
+                    >
+                      {timingInfo.detailText}
+                    </div>
+                  ) : null}
 
                   <div className="mt-2 flex flex-wrap gap-1">
                     {place.tags?.length > 0 ? (
@@ -551,6 +829,18 @@ export function PlaceListView({
                     )}
                   </div>
                 </div>
+
+                {detailTimingInfo.hasTiming ? (
+                  <div
+                    className={`mt-2 rounded-xl px-2 py-1.5 text-xs font-semibold ${
+                      detailTimingInfo.isActive
+                        ? "bg-amber-50 text-amber-700"
+                        : "bg-white text-slate-500"
+                    }`}
+                  >
+                    {detailTimingInfo.detailText}
+                  </div>
+                ) : null}
 
                 <div className="mt-2 max-h-16 overflow-y-auto whitespace-pre-wrap break-words text-sm leading-5 text-slate-700">
                   {detailPlace.notes || "沒有地點筆記"}

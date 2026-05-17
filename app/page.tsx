@@ -22,14 +22,15 @@ import {
 } from "@/components/PlaceFormModal";
 import { PlaceListView, type PlaceFilters } from "@/components/PlaceListView";
 import { SettingsView } from "@/components/SettingsView";
+import { TimelineView } from "@/components/TimelineView";
 import {
   VisitFormModal,
   type VisitFormValues,
 } from "@/components/VisitFormModal";
 import { db } from "@/lib/firebase";
-import type { PlaceItem } from "@/lib/places";
+import type { BestTimingItem, PlaceItem } from "@/lib/places";
 
-type TabId = "map" | "list" | "settings";
+type TabId = "map" | "list" | "timeline" | "settings";
 
 export type MapGroup = {
   id: string;
@@ -74,6 +75,65 @@ function normalizeTags(tagsText: string) {
     .filter(Boolean);
 }
 
+function normalizeBestTimings(value: unknown): BestTimingItem[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+
+      const raw = item as Partial<BestTimingItem>;
+
+      if (raw.kind === "months") {
+        return {
+          id:
+            typeof raw.id === "string" && raw.id.trim()
+              ? raw.id
+              : `timing-${Date.now()}-${Math.random()
+                  .toString(36)
+                  .slice(2, 8)}`,
+          kind: "months" as const,
+          title:
+            typeof raw.title === "string" && raw.title.trim()
+              ? raw.title
+              : "月份提醒",
+          note: typeof raw.note === "string" ? raw.note : "",
+          months: Array.isArray(raw.months)
+            ? raw.months
+                .filter((month) => Number.isInteger(month))
+                .filter((month) => month >= 1 && month <= 12)
+            : [],
+        };
+      }
+
+      if (raw.kind === "dateRange") {
+        return {
+          id:
+            typeof raw.id === "string" && raw.id.trim()
+              ? raw.id
+              : `timing-${Date.now()}-${Math.random()
+                  .toString(36)
+                  .slice(2, 8)}`,
+          kind: "dateRange" as const,
+          title:
+            typeof raw.title === "string" && raw.title.trim()
+              ? raw.title
+              : "日期區間提醒",
+          note: typeof raw.note === "string" ? raw.note : "",
+          startDate: typeof raw.startDate === "string" ? raw.startDate : "",
+          endDate: typeof raw.endDate === "string" ? raw.endDate : "",
+        };
+      }
+
+      return null;
+    })
+    .filter((item): item is NonNullable<typeof item> => item !== null);
+}
+
 function normalizePlace(id: string, data: Partial<PlaceItem>): PlaceItem {
   return {
     id,
@@ -93,6 +153,7 @@ function normalizePlace(id: string, data: Partial<PlaceItem>): PlaceItem {
     firstVisitedAt: data.firstVisitedAt,
     lastVisitedAt: data.lastVisitedAt,
     bestTiming: data.bestTiming,
+    bestTimings: normalizeBestTimings(data.bestTimings),
     createdAt: data.createdAt ?? new Date().toISOString(),
     updatedAt: data.updatedAt ?? new Date().toISOString(),
   };
@@ -297,13 +358,8 @@ export default function Home() {
   );
 
   useEffect(() => {
-    if (joinedGroupIds.length > 0) {
-      return;
-    }
-
-    if (hasCreatedInitialGroupRef.current) {
-      return;
-    }
+    if (joinedGroupIds.length > 0) return;
+    if (hasCreatedInitialGroupRef.current) return;
 
     hasCreatedInitialGroupRef.current = true;
 
@@ -354,9 +410,7 @@ export default function Home() {
   useEffect(() => {
     const savedGroupId = window.localStorage.getItem(CURRENT_GROUP_STORAGE_KEY);
 
-    if (!savedGroupId) {
-      return;
-    }
+    if (!savedGroupId) return;
 
     window.setTimeout(() => {
       setCurrentGroupId(savedGroupId);
@@ -364,9 +418,7 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (currentGroupId === DEFAULT_GROUP_ID) {
-      return;
-    }
+    if (currentGroupId === DEFAULT_GROUP_ID) return;
 
     window.localStorage.setItem(CURRENT_GROUP_STORAGE_KEY, currentGroupId);
   }, [currentGroupId]);
@@ -434,9 +486,7 @@ export default function Home() {
   }, [groupsCollectionRef]);
 
   useEffect(() => {
-    if (allGroups.length === 0) {
-      return;
-    }
+    if (allGroups.length === 0) return;
 
     const unsubscribes = allGroups.map((group) => {
       const requestRef = doc(
@@ -448,17 +498,13 @@ export default function Home() {
       );
 
       return onSnapshot(requestRef, (snapshot) => {
-        if (!snapshot.exists()) {
-          return;
-        }
+        if (!snapshot.exists()) return;
 
         const data = snapshot.data();
 
         if (data.status === "approved") {
           setJoinedGroupIds((prev) => {
-            if (prev.includes(group.id)) {
-              return prev;
-            }
+            if (prev.includes(group.id)) return prev;
 
             return [...prev, group.id];
           });
@@ -516,8 +562,11 @@ export default function Home() {
     const unsubscribe = onSnapshot(
       placesQuery,
       (snapshot) => {
-        const nextPlaces = snapshot.docs.map((document) =>
-          normalizePlace(document.id, document.data() as Partial<PlaceItem>)
+        const nextPlaces = snapshot.docs.map((documentSnapshot) =>
+          normalizePlace(
+            documentSnapshot.id,
+            documentSnapshot.data() as Partial<PlaceItem>
+          )
         );
 
         setPlaces(nextPlaces);
@@ -719,9 +768,7 @@ export default function Home() {
           doc(db, "groups", groupDocument.id, "info", "meta")
         );
 
-        if (!metaSnapshot.exists()) {
-          continue;
-        }
+        if (!metaSnapshot.exists()) continue;
 
         const data = metaSnapshot.data();
         const inviteCode =
@@ -818,9 +865,7 @@ export default function Home() {
   };
 
   const handleLeaveCurrentGroup = () => {
-    if (!currentGroup) {
-      return;
-    }
+    if (!currentGroup) return;
 
     if (joinedGroupIds.length <= 1) {
       window.alert("至少需要保留一個地圖群");
@@ -831,9 +876,7 @@ export default function Home() {
       `確定要退出「${currentGroupName}」嗎？\n\n退出後不會刪除地點資料，只是不再顯示這個地圖群。`
     );
 
-    if (!confirmLeave) {
-      return;
-    }
+    if (!confirmLeave) return;
 
     setIsLeavingGroup(true);
 
@@ -855,9 +898,7 @@ export default function Home() {
   };
 
   const handleDeleteCurrentGroup = async () => {
-    if (!currentGroup) {
-      return;
-    }
+    if (!currentGroup) return;
 
     if (!isGroupOwner) {
       window.alert("只有建立這個地圖群的人可以刪除地圖群");
@@ -868,17 +909,13 @@ export default function Home() {
       `確定要刪除「${currentGroupName}」嗎？\n\n這會刪除這個地圖群的主資料與所有地點資料，無法復原。`
     );
 
-    if (!confirmDelete) {
-      return;
-    }
+    if (!confirmDelete) return;
 
     const secondConfirmDelete = window.confirm(
       `再次確認：真的要永久刪除「${currentGroupName}」嗎？`
     );
 
-    if (!secondConfirmDelete) {
-      return;
-    }
+    if (!secondConfirmDelete) return;
 
     setIsDeletingGroup(true);
 
@@ -943,6 +980,7 @@ export default function Home() {
 
   const handleSubmitForm = async (values: PlaceFormValues) => {
     const now = new Date().toISOString();
+    const safeBestTimings = normalizeBestTimings(values.bestTimings);
 
     try {
       if (formMode === "create") {
@@ -963,6 +1001,7 @@ export default function Home() {
           lng: values.lng ?? 121.36444898053523,
           visits: [],
           visitCount: 0,
+          bestTimings: safeBestTimings,
           createdAt: now,
           updatedAt: now,
         };
@@ -986,6 +1025,7 @@ export default function Home() {
           notes: values.notes.trim(),
           lat: values.lat ?? editingPlace.lat,
           lng: values.lng ?? editingPlace.lng,
+          bestTimings: safeBestTimings,
           updatedAt: now,
         };
 
@@ -1068,7 +1108,9 @@ export default function Home() {
     } catch (error) {
       console.error(error);
       window.alert(
-        visitFormMode === "edit" ? "更新回憶失敗，請稍後再試" : "新增回憶失敗，請稍後再試"
+        visitFormMode === "edit"
+          ? "更新回憶失敗，請稍後再試"
+          : "新增回憶失敗，請稍後再試"
       );
     }
   };
@@ -1083,9 +1125,7 @@ export default function Home() {
 
     const confirmDelete = window.confirm("確定要刪除這筆回憶嗎？");
 
-    if (!confirmDelete) {
-      return;
-    }
+    if (!confirmDelete) return;
 
     try {
       const currentVisits = Array.isArray(targetPlace.visits)
@@ -1134,9 +1174,7 @@ export default function Home() {
       `確定要刪除 ${selectedDeleteTags.length} 個標籤嗎？`
     );
 
-    if (!confirmDelete) {
-      return;
-    }
+    if (!confirmDelete) return;
 
     try {
       const targetPlaces = places.filter((place) =>
@@ -1260,6 +1298,17 @@ export default function Home() {
           onFiltersChange={setFilters}
           onEditPlace={openEditForm}
           onDeletePlace={handleDeletePlace}
+          onAddVisit={openVisitModal}
+          onEditVisit={openEditVisitModal}
+          onDeleteVisit={handleDeleteVisit}
+        />
+      )}
+
+
+      {!isLoadingPlaces && activeTab === "timeline" && (
+        <TimelineView
+          places={places}
+          availableTags={availableTags}
           onAddVisit={openVisitModal}
           onEditVisit={openEditVisitModal}
           onDeleteVisit={handleDeleteVisit}

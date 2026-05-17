@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { GoogleMap, MarkerF, useJsApiLoader } from "@react-google-maps/api";
 import { openGoogleMapsDirections } from "@/lib/navigation";
-import type { PlaceItem } from "@/lib/places";
+import type { BestTimingItem, PlaceItem } from "@/lib/places";
 
 type MapViewProps = {
   places: PlaceItem[];
@@ -30,6 +30,12 @@ type PhotoPreviewState = {
   index: number;
 } | null;
 
+type TimingDisplayInfo = {
+  hasTiming: boolean;
+  isActive: boolean;
+  detailText: string;
+};
+
 const defaultMapFilters: MapFilterState = {
   showWantToGo: true,
   showWantToReturn: true,
@@ -47,6 +53,20 @@ function formatDate(dateText?: string) {
   return dateText.replaceAll("-", "/");
 }
 
+function formatShortDate(dateText?: string) {
+  if (!dateText) return "";
+
+  const parts = dateText.split("-");
+  if (parts.length !== 3) return formatDate(dateText);
+
+  const month = Number(parts[1]);
+  const day = Number(parts[2]);
+
+  if (!month || !day) return formatDate(dateText);
+
+  return `${month}/${day}`;
+}
+
 function renderRating(rating?: number) {
   return Array.from({ length: 5 }).map((_, i) => (
     <span
@@ -58,8 +78,193 @@ function renderRating(rating?: number) {
   ));
 }
 
+function getTodayDateText() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function getCurrentMonth(today: string) {
+  return Number(today.slice(5, 7));
+}
+
+function isDateInRange(today: string, startDate?: string, endDate?: string) {
+  if (startDate && today < startDate) return false;
+  if (endDate && today > endDate) return false;
+  return true;
+}
+
+function getNearestMonth(months: number[] | undefined, today: string) {
+  if (!Array.isArray(months) || months.length === 0) return null;
+
+  const currentMonth = getCurrentMonth(today);
+  const sortedMonths = Array.from(new Set(months))
+    .filter((month) => month >= 1 && month <= 12)
+    .sort((a, b) => a - b);
+
+  if (sortedMonths.length === 0) return null;
+
+  return sortedMonths.find((month) => month >= currentMonth) ?? sortedMonths[0];
+}
+
+function getMonthText(months: number[] | undefined, today: string) {
+  const nearestMonth = getNearestMonth(months, today);
+
+  if (!nearestMonth) return "";
+
+  return `${nearestMonth}月`;
+}
+
+function getDateRangeText(item: BestTimingItem) {
+  if (item.startDate && item.endDate) {
+    return `${formatShortDate(item.startDate)}~${formatShortDate(item.endDate)}`;
+  }
+
+  if (item.startDate) {
+    return `${formatShortDate(item.startDate)} 起`;
+  }
+
+  if (item.endDate) {
+    return `${formatShortDate(item.endDate)} 前`;
+  }
+
+  return "";
+}
+
+function isTimingItemActive(item: BestTimingItem, today: string) {
+  if (item.kind === "months") {
+    const months = Array.isArray(item.months) ? item.months : [];
+
+    if (months.length === 0) return false;
+
+    return months.includes(getCurrentMonth(today));
+  }
+
+  return isDateInRange(today, item.startDate, item.endDate);
+}
+
+function getTimingItemSortValue(item: BestTimingItem, today: string) {
+  if (item.kind === "dateRange") {
+    if (item.startDate && item.startDate >= today) return item.startDate;
+    if (item.endDate && item.endDate >= today) return item.endDate;
+    return "9999-12-31";
+  }
+
+  const nearestMonth = getNearestMonth(item.months, today);
+
+  if (!nearestMonth) return "9999-12-31";
+
+  const currentMonth = getCurrentMonth(today);
+  const sortMonth =
+    nearestMonth >= currentMonth ? nearestMonth : nearestMonth + 12;
+
+  return `${String(sortMonth).padStart(2, "0")}`;
+}
+
+function getTimingPeriodText(item: BestTimingItem, today: string) {
+  if (item.kind === "months") {
+    return getMonthText(item.months, today);
+  }
+
+  return getDateRangeText(item);
+}
+
+function getTimingDisplayText(item: BestTimingItem, today: string) {
+  const periodText = getTimingPeriodText(item, today);
+  const note = item.note?.trim() ?? "";
+
+  if (periodText && note) {
+    return `最近適合去：${periodText}　${note}`;
+  }
+
+  if (periodText) {
+    return `最近適合去：${periodText}`;
+  }
+
+  if (note) {
+    return `最近適合去：${note}`;
+  }
+
+  return "最近適合去";
+}
+
+function getNormalizedBestTimings(place: PlaceItem): BestTimingItem[] {
+  const newTimings = Array.isArray(place.bestTimings)
+    ? place.bestTimings
+    : [];
+
+  if (newTimings.length > 0) {
+    return newTimings;
+  }
+
+  const oldBestTiming = place.bestTiming;
+  const oldItems: BestTimingItem[] = [];
+
+  if (oldBestTiming?.months?.length) {
+    oldItems.push({
+      id: "legacy-months",
+      kind: "months",
+      title: "適合月份",
+      months: oldBestTiming.months,
+    });
+  }
+
+  if (oldBestTiming?.timeRanges?.length) {
+    oldBestTiming.timeRanges.forEach((range, index) => {
+      oldItems.push({
+        id: `legacy-range-${index}`,
+        kind: "dateRange",
+        title: "適合期間",
+        startDate: range.start,
+        endDate: range.end,
+      });
+    });
+  }
+
+  return oldItems;
+}
+
+function getTimingDisplayInfo(
+  place: PlaceItem,
+  today: string
+): TimingDisplayInfo {
+  const timings = getNormalizedBestTimings(place);
+
+  if (timings.length === 0) {
+    return {
+      hasTiming: false,
+      isActive: false,
+      detailText: "",
+    };
+  }
+
+  const activeTiming = timings.find((item) => isTimingItemActive(item, today));
+
+  if (activeTiming) {
+    return {
+      hasTiming: true,
+      isActive: true,
+      detailText: getTimingDisplayText(activeTiming, today),
+    };
+  }
+
+  const nextTiming = [...timings].sort((a, b) =>
+    getTimingItemSortValue(a, today).localeCompare(
+      getTimingItemSortValue(b, today)
+    )
+  )[0];
+
+  return {
+    hasTiming: true,
+    isActive: false,
+    detailText: nextTiming ? getTimingDisplayText(nextTiming, today) : "",
+  };
+}
+
+function isBestTimingActive(place: PlaceItem, today: string) {
+  return getTimingDisplayInfo(place, today).isActive;
+}
+
 function getStatusInfo(status?: string) {
-  if (status === "wantToReturn")  {
+  if (status === "wantToReturn") {
     return {
       label: "✨ 還想去",
       className: "bg-orange-100 text-orange-600",
@@ -91,15 +296,32 @@ function getStatusInfo(status?: string) {
 function buildMarkerIcon(
   heart: string,
   fillHex: string,
-  selected: boolean
+  selected: boolean,
+  timingActive: boolean
 ): google.maps.Icon {
-  const dim = selected ? 58 : 50;
+  const dim = selected ? 62 : timingActive ? 58 : 50;
   const cx = dim / 2;
   const cy = dim / 2;
   const pinBottom = dim - 3;
+  const glowCircle = timingActive
+    ? `<circle cx="${cx}" cy="${cy}" r="${dim / 2 - 3}" fill="#fde68a" opacity="0.9" />`
+    : "";
+
+  const sparkle = timingActive
+    ? `<text
+        x="${dim - 12}"
+        y="18"
+        font-size="16"
+        text-anchor="middle"
+        font-family="Arial"
+        font-weight="700"
+        fill="#f59e0b"
+      >✦</text>`
+    : "";
 
   const svg = `
   <svg xmlns="http://www.w3.org/2000/svg" width="${dim}" height="${dim}" viewBox="0 0 ${dim} ${dim}">
+    ${glowCircle}
     <path
       d="M${cx} ${pinBottom}
       C${cx - 12} ${cy + 8},
@@ -110,8 +332,8 @@ function buildMarkerIcon(
       ${cx + 12} ${cy + 8},
       ${cx} ${pinBottom} Z"
       fill="${fillHex}"
-      stroke="white"
-      stroke-width="3"
+      stroke="${timingActive ? "#facc15" : "white"}"
+      stroke-width="${timingActive ? "5" : "3"}"
     />
     <text
       x="${cx}"
@@ -124,6 +346,7 @@ function buildMarkerIcon(
     >
       ${heart}
     </text>
+    ${sparkle}
   </svg>`;
 
   return {
@@ -161,6 +384,8 @@ export function MapView({
     googleMapsApiKey: apiKey,
     libraries: GOOGLE_MAP_LIBRARIES,
   });
+
+  const todayText = useMemo(() => getTodayDateText(), []);
 
   const mapCenter = useMemo(
     () => ({
@@ -229,10 +454,7 @@ export function MapView({
     return places.filter((place) => {
       if (place.status === "wantToGo" && !mapFilters.showWantToGo) return false;
 
-      if (
-        place.status === "wantToReturn"  &&
-        !mapFilters.showWantToReturn
-      ) {
+      if (place.status === "wantToReturn" && !mapFilters.showWantToReturn) {
         return false;
       }
 
@@ -270,6 +492,18 @@ export function MapView({
     return getStatusInfo(selectedPlace.status);
   }, [selectedPlace]);
 
+  const selectedTimingInfo = useMemo(() => {
+    if (!selectedPlace) {
+      return {
+        hasTiming: false,
+        isActive: false,
+        detailText: "",
+      };
+    }
+
+    return getTimingDisplayInfo(selectedPlace, todayText);
+  }, [selectedPlace, todayText]);
+
   const sortedTimelineVisits = useMemo(() => {
     if (!timelinePlace?.visits) return [];
 
@@ -287,15 +521,21 @@ export function MapView({
 
     filteredPlaces.forEach((place) => {
       const info = getStatusInfo(place.status);
+      const timingActive = isBestTimingActive(place, todayText);
 
       nextIcons.set(
         place.id,
-        buildMarkerIcon(info.heart, info.markerFill, selectedPlaceId === place.id)
+        buildMarkerIcon(
+          info.heart,
+          info.markerFill,
+          selectedPlaceId === place.id,
+          timingActive
+        )
       );
     });
 
     return nextIcons;
-  }, [filteredPlaces, isLoaded, selectedPlaceId]);
+  }, [filteredPlaces, isLoaded, selectedPlaceId, todayText]);
 
   const handleMapLoad = useCallback((map: google.maps.Map) => {
     mapRef.current = map;
@@ -367,9 +607,12 @@ export function MapView({
     setTimelinePlace(null);
   }, []);
 
-  const handleOpenPhotoPreview = useCallback((photos: string[], index: number) => {
-    setPhotoPreview({ photos, index });
-  }, []);
+  const handleOpenPhotoPreview = useCallback(
+    (photos: string[], index: number) => {
+      setPhotoPreview({ photos, index });
+    },
+    []
+  );
 
   const handleClosePhotoPreview = useCallback(() => {
     setPhotoPreview(null);
@@ -573,7 +816,9 @@ export function MapView({
             {selectedPlace && selectedStatusInfo ? (
               <div className="absolute bottom-24 left-3 right-3 z-40">
                 <div
-                  className="overflow-hidden rounded-3xl bg-white shadow-2xl"
+                  className={`overflow-hidden rounded-3xl bg-white shadow-2xl ${
+                    selectedTimingInfo.isActive ? "ring-4 ring-amber-300" : ""
+                  }`}
                   onClick={() => handleOpenTimeline(selectedPlace)}
                 >
                   <div className="flex">
@@ -619,13 +864,25 @@ export function MapView({
                         </button>
                       </div>
 
-                      <div className="mt-2">
+                      <div className="mt-2 flex flex-wrap gap-1.5">
                         <span
                           className={`rounded-full px-2 py-1 text-xs font-bold ${selectedStatusInfo.className}`}
                         >
                           {selectedStatusInfo.label}
                         </span>
                       </div>
+
+                      {selectedTimingInfo.hasTiming ? (
+                        <div
+                          className={`mt-2 rounded-xl px-2 py-1.5 text-xs font-semibold ${
+                            selectedTimingInfo.isActive
+                              ? "bg-amber-50 text-amber-700"
+                              : "bg-slate-50 text-slate-500"
+                          }`}
+                        >
+                          {selectedTimingInfo.detailText}
+                        </div>
+                      ) : null}
 
                       <div className="mt-2 flex flex-wrap gap-1">
                         {selectedPlace.tags?.map((tag) => (
