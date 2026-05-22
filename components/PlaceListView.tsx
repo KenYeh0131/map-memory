@@ -11,6 +11,11 @@ export type PlaceFilters = {
   tags: string[];
 };
 
+type CopyTargetGroup = {
+  id: string;
+  name: string;
+};
+
 type PlaceListViewProps = {
   places: PlaceItem[];
   filters: PlaceFilters;
@@ -21,11 +26,23 @@ type PlaceListViewProps = {
   onAddVisit: (place: PlaceItem) => void;
   onEditVisit: (placeId: string, visitId: string) => void;
   onDeleteVisit: (placeId: string, visitId: string) => void;
+  copyTargetGroups: CopyTargetGroup[];
+  currentGroupId: string;
+  onCopyPlaceToGroup: (
+    place: PlaceItem,
+    targetGroupId: string
+  ) => Promise<boolean>;
 };
 
 type PhotoPreviewState = {
   photos: string[];
   index: number;
+} | null;
+
+type CopyModalState = {
+  place: PlaceItem;
+  selectedGroupId: string;
+  isCopying: boolean;
 } | null;
 
 type TimingDisplayInfo = {
@@ -177,9 +194,7 @@ function getTimingDisplayText(item: BestTimingItem, today: string) {
 }
 
 function getNormalizedBestTimings(place: PlaceItem): BestTimingItem[] {
-  const newTimings = Array.isArray(place.bestTimings)
-    ? place.bestTimings
-    : [];
+  const newTimings = Array.isArray(place.bestTimings) ? place.bestTimings : [];
 
   if (newTimings.length > 0) {
     return newTimings;
@@ -252,26 +267,26 @@ function getTimingDisplayInfo(
 function getStatusInfo(status: PlaceStatus | string | undefined) {
   if (status === "wantToReturn") {
     return {
-      label: "✨ 還想去",
+      label: "❤️ 還想去",
       className: "bg-orange-100 text-orange-600",
-      emptyEmoji: "💖",
+      emptyEmoji: "❤️",
       emptyText: "一定還要再來",
     };
   }
 
   if (status === "memory") {
     return {
-      label: "🫧 打卡完成",
+      label: "♡ 打卡完成",
       className: "bg-slate-200 text-slate-600",
-      emptyEmoji: "🎞️",
+      emptyEmoji: "♡",
       emptyText: "留在回憶裡",
     };
   }
 
   return {
-    label: "♥ 想去",
+    label: "🤩 想去",
     className: "bg-red-100 text-red-600",
-    emptyEmoji: "😍",
+    emptyEmoji: "🤩",
     emptyText: "好想去~",
   };
 }
@@ -297,14 +312,22 @@ export function PlaceListView({
   onAddVisit,
   onEditVisit,
   onDeleteVisit,
+  copyTargetGroups,
+  currentGroupId,
+  onCopyPlaceToGroup,
 }: PlaceListViewProps) {
   const [detailPlaceId, setDetailPlaceId] = useState<string | null>(null);
   const [statusFilters, setStatusFilters] =
     useState<StatusFilterState>(defaultStatusFilters);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [photoPreview, setPhotoPreview] = useState<PhotoPreviewState>(null);
+  const [copyModal, setCopyModal] = useState<CopyModalState>(null);
 
   const todayText = useMemo(() => getTodayDateText(), []);
+
+  const availableCopyTargetGroups = useMemo(() => {
+    return copyTargetGroups.filter((group) => group.id !== currentGroupId);
+  }, [copyTargetGroups, currentGroupId]);
 
   const selectedTags = useMemo(() => {
     return Array.isArray(filters.tags) ? filters.tags : [];
@@ -474,6 +497,64 @@ export function PlaceListView({
     setDetailPlaceId(null);
   }, []);
 
+  const handleOpenCopyModal = useCallback(
+    (place: PlaceItem) => {
+      if (availableCopyTargetGroups.length === 0) {
+        window.alert("目前沒有其他可複製的地圖群，請先建立或加入其他地圖群");
+        return;
+      }
+
+      setCopyModal({
+        place,
+        selectedGroupId: availableCopyTargetGroups[0]?.id ?? "",
+        isCopying: false,
+      });
+    },
+    [availableCopyTargetGroups]
+  );
+
+  const handleCloseCopyModal = useCallback(() => {
+    setCopyModal(null);
+  }, []);
+
+  const handleConfirmCopy = useCallback(async () => {
+    if (!copyModal) return;
+
+    if (!copyModal.selectedGroupId) {
+      window.alert("請選擇要複製到哪一個地圖群");
+      return;
+    }
+
+    setCopyModal((prev) => (prev ? { ...prev, isCopying: true } : prev));
+
+    try {
+      const ok = await onCopyPlaceToGroup(
+        copyModal.place,
+        copyModal.selectedGroupId
+      );
+
+      if (ok) {
+        const targetGroup = copyTargetGroups.find(
+          (group) => group.id === copyModal.selectedGroupId
+        );
+
+        window.alert(
+          targetGroup
+            ? `已複製到「${targetGroup.name}」`
+            : "已複製到其他地圖群"
+        );
+
+        setCopyModal(null);
+      } else {
+        setCopyModal((prev) => (prev ? { ...prev, isCopying: false } : prev));
+      }
+    } catch (error) {
+      console.error(error);
+      window.alert("複製失敗，請稍後再試");
+      setCopyModal((prev) => (prev ? { ...prev, isCopying: false } : prev));
+    }
+  }, [copyModal, copyTargetGroups, onCopyPlaceToGroup]);
+
   const handleOpenPhotoPreview = useCallback((photos: string[], index: number) => {
     setPhotoPreview({ photos, index });
   }, []);
@@ -532,7 +613,7 @@ export function PlaceListView({
                     : "bg-slate-100 text-slate-400"
                 }`}
               >
-                ♥ 想去
+                🤩 想去
               </button>
 
               <button
@@ -544,7 +625,7 @@ export function PlaceListView({
                     : "bg-slate-100 text-slate-400"
                 }`}
               >
-                ✨ 還想再去
+                ❤️ 還想去
               </button>
 
               <button
@@ -556,7 +637,7 @@ export function PlaceListView({
                     : "bg-slate-100 text-slate-400"
                 }`}
               >
-                🫧 打卡完成
+                ♡ 打卡完成
               </button>
             </div>
 
@@ -717,14 +798,15 @@ export function PlaceListView({
                     {renderRating(place.rating)}
                   </div>
 
-                  <div className="mt-auto grid grid-cols-4 gap-2 pt-3">
+                  <div className="mt-auto grid grid-cols-5 gap-1.5 pt-3">
                     <button
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
                         handleStartNavigation(place);
                       }}
-                      className="rounded-xl bg-blue-500 px-2 py-2 text-xs font-bold text-white"
+                      className="rounded-xl bg-blue-500 px-1 py-2 text-xs font-bold text-white"
+                      aria-label="導航"
                     >
                       🚕
                     </button>
@@ -735,7 +817,8 @@ export function PlaceListView({
                         e.stopPropagation();
                         onAddVisit(place);
                       }}
-                      className="rounded-xl bg-orange-500 px-2 py-2 text-xs font-bold text-white"
+                      className="rounded-xl bg-orange-500 px-1 py-2 text-xs font-bold text-white"
+                      aria-label="加入回憶"
                     >
                       ＋
                     </button>
@@ -746,9 +829,22 @@ export function PlaceListView({
                         e.stopPropagation();
                         onEditPlace(place);
                       }}
-                      className="rounded-xl bg-slate-200 px-2 py-2 text-xs font-bold text-slate-700"
+                      className="rounded-xl bg-slate-200 px-1 py-2 text-xs font-bold text-slate-700"
+                      aria-label="編輯"
                     >
                       📝
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleOpenCopyModal(place);
+                      }}
+                      className="rounded-xl bg-emerald-100 px-1 py-2 text-xs font-bold text-emerald-700"
+                      aria-label="複製到其他群組"
+                    >
+                      📋
                     </button>
 
                     <button
@@ -760,7 +856,8 @@ export function PlaceListView({
                           onDeletePlace(place.id);
                         }
                       }}
-                      className="rounded-xl bg-rose-100 px-2 py-2 text-xs font-bold text-rose-600"
+                      className="rounded-xl bg-rose-100 px-1 py-2 text-xs font-bold text-rose-600"
+                      aria-label="刪除"
                     >
                       🗑️
                     </button>
@@ -845,6 +942,40 @@ export function PlaceListView({
                 <div className="mt-2 max-h-16 overflow-y-auto whitespace-pre-wrap break-words text-sm leading-5 text-slate-700">
                   {detailPlace.notes || "沒有地點筆記"}
                 </div>
+
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleStartNavigation(detailPlace)}
+                    className="rounded-xl bg-blue-500 px-3 py-2 text-xs font-bold text-white"
+                  >
+                    🚕 出發
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => onAddVisit(detailPlace)}
+                    className="rounded-xl bg-orange-500 px-3 py-2 text-xs font-bold text-white"
+                  >
+                    ＋回憶
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => onEditPlace(detailPlace)}
+                    className="rounded-xl bg-slate-200 px-3 py-2 text-xs font-bold text-slate-700"
+                  >
+                    📝 編輯
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleOpenCopyModal(detailPlace)}
+                    className="rounded-xl bg-emerald-100 px-3 py-2 text-xs font-bold text-emerald-700"
+                  >
+                    📋 複製
+                  </button>
+                </div>
               </div>
 
               <div className="mt-3">
@@ -862,7 +993,10 @@ export function PlaceListView({
                       const photos = Array.isArray(visit.photos)
                         ? visit.photos
                         : [];
-                      const visiblePhotos = photos.slice(0, TIMELINE_PHOTO_LIMIT);
+                      const visiblePhotos = photos.slice(
+                        0,
+                        TIMELINE_PHOTO_LIMIT
+                      );
                       const hiddenPhotoCount = Math.max(
                         0,
                         photos.length - TIMELINE_PHOTO_LIMIT
@@ -876,7 +1010,9 @@ export function PlaceListView({
                           <div className="absolute right-2 top-2 z-10 flex gap-1">
                             <button
                               type="button"
-                              onClick={() => onEditVisit(detailPlace.id, visit.id)}
+                              onClick={() =>
+                                onEditVisit(detailPlace.id, visit.id)
+                              }
                               className="rounded-full bg-slate-100 px-2 py-1 text-xs font-bold text-slate-700"
                             >
                               📝
@@ -955,6 +1091,93 @@ export function PlaceListView({
                     })}
                   </div>
                 )}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {copyModal ? (
+        <div
+          className="fixed inset-0 z-[80] flex items-end justify-center bg-black/50 px-3 pb-[calc(6rem+env(safe-area-inset-bottom,0px))] pt-3"
+          onClick={copyModal.isCopying ? undefined : handleCloseCopyModal}
+        >
+          <div
+            className="w-full max-w-md rounded-3xl bg-white p-4 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h2 className="text-lg font-bold text-slate-900">
+                  複製到其他群組
+                </h2>
+
+                <p className="mt-1 truncate text-sm text-slate-500">
+                  {copyModal.place.name}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleCloseCopyModal}
+                disabled={copyModal.isCopying}
+                className="rounded-full bg-slate-100 px-3 py-1.5 text-sm font-bold text-slate-500 disabled:opacity-50"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="mt-4 space-y-3">
+              <label className="block text-sm">
+                <span className="mb-1 block font-semibold text-slate-800">
+                  目標地圖群
+                </span>
+
+                <select
+                  value={copyModal.selectedGroupId}
+                  onChange={(event) =>
+                    setCopyModal((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            selectedGroupId: event.target.value,
+                          }
+                        : prev
+                    )
+                  }
+                  disabled={copyModal.isCopying}
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 disabled:bg-slate-100"
+                >
+                  {availableCopyTargetGroups.map((group) => (
+                    <option key={group.id} value={group.id}>
+                      {group.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <div className="rounded-2xl bg-slate-50 p-3 text-xs leading-5 text-slate-600">
+                會複製地點資訊、照片、標籤、筆記與適合期間；不會複製回憶紀錄與拜訪次數。
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={handleCloseCopyModal}
+                  disabled={copyModal.isCopying}
+                  className="rounded-xl bg-slate-100 px-3 py-2 text-sm font-bold text-slate-600 disabled:opacity-50"
+                >
+                  取消
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleConfirmCopy}
+                  disabled={copyModal.isCopying}
+                  className="rounded-xl bg-emerald-600 px-3 py-2 text-sm font-bold text-white disabled:bg-slate-400"
+                >
+                  {copyModal.isCopying ? "複製中..." : "確認複製"}
+                </button>
               </div>
             </div>
           </div>

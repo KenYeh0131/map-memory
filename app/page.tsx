@@ -1156,6 +1156,90 @@ export default function Home() {
     }
   };
 
+
+  const handleCopyPlaceToGroup = async (
+    place: PlaceItem,
+    targetGroupId: string
+  ) => {
+    if (!targetGroupId) {
+      window.alert("請選擇要複製到哪一個地圖群");
+      return false;
+    }
+
+    if (targetGroupId === safeCurrentGroupId) {
+      window.alert("不能複製到目前所在的地圖群");
+      return false;
+    }
+
+    const targetGroup = mapGroups.find((group) => group.id === targetGroupId);
+
+    if (!targetGroup) {
+      window.alert("找不到目標地圖群，請重新整理後再試");
+      return false;
+    }
+
+    const targetPlacesRef = collection(db, "groups", targetGroupId, "places");
+    const targetPlacesSnapshot = await getDocs(targetPlacesRef);
+    const normalizedName = place.name.trim();
+    const normalizedAddress = place.address.trim();
+
+    const hasDuplicate = targetPlacesSnapshot.docs.some((placeDocument) => {
+      const data = placeDocument.data() as Partial<PlaceItem>;
+
+      return (
+        (data.name ?? "").trim() === normalizedName &&
+        (data.address ?? "").trim() === normalizedAddress
+      );
+    });
+
+    if (hasDuplicate) {
+      const confirmCopy = window.confirm(
+        `「${targetGroup.name}」可能已經有相同地點。
+
+仍要複製一份新的地點嗎？`
+      );
+
+      if (!confirmCopy) {
+        return false;
+      }
+    }
+
+    const now = new Date().toISOString();
+    const copiedPlaceId = `p-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2, 8)}`;
+
+    const copiedPlace: PlaceItem = {
+      id: copiedPlaceId,
+      name: normalizedName,
+      status: place.status,
+      address: normalizedAddress,
+      rating: place.rating ?? 0,
+      photos: Array.isArray(place.photos) ? [...place.photos] : [],
+      coverPhotoIndex: place.coverPhotoIndex ?? 0,
+      completedDate: "",
+      tags: Array.isArray(place.tags) ? [...place.tags] : [],
+      navigationTarget: place.navigationTarget ?? "",
+      notes: place.notes ?? "",
+      ...(typeof place.lat === "number" ? { lat: place.lat } : {}),
+      ...(typeof place.lng === "number" ? { lng: place.lng } : {}),
+      visits: [],
+      visitCount: 0,
+      bestTimings: Array.isArray(place.bestTimings)
+        ? place.bestTimings.map((timing) => ({ ...timing }))
+        : [],
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    await setDoc(
+      doc(db, "groups", targetGroupId, "places", copiedPlaceId),
+      copiedPlace
+    );
+
+    return true;
+  };
+
   const handleToggleDeleteTag = (tag: string) => {
     setSelectedDeleteTags((prev) =>
       prev.includes(tag)
@@ -1286,6 +1370,9 @@ export default function Home() {
             onAddVisit={openVisitModal}
             onEditVisit={openEditVisitModal}
             onDeleteVisit={handleDeleteVisit}
+            copyTargetGroups={mapGroups}
+            currentGroupId={safeCurrentGroupId}
+            onCopyPlaceToGroup={handleCopyPlaceToGroup}
           />
         </div>
       )}
@@ -1301,6 +1388,9 @@ export default function Home() {
           onAddVisit={openVisitModal}
           onEditVisit={openEditVisitModal}
           onDeleteVisit={handleDeleteVisit}
+          copyTargetGroups={mapGroups}
+          currentGroupId={safeCurrentGroupId}
+          onCopyPlaceToGroup={handleCopyPlaceToGroup}
         />
       )}
 

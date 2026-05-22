@@ -5,6 +5,11 @@ import { GoogleMap, MarkerF, useJsApiLoader } from "@react-google-maps/api";
 import { openGoogleMapsDirections } from "@/lib/navigation";
 import type { BestTimingItem, PlaceItem } from "@/lib/places";
 
+type CopyTargetGroup = {
+  id: string;
+  name: string;
+};
+
 type MapViewProps = {
   places: PlaceItem[];
   selectedPlaceId: string | null;
@@ -14,6 +19,9 @@ type MapViewProps = {
   onAddVisit: (place: PlaceItem) => void;
   onEditVisit: (placeId: string, visitId: string) => void;
   onDeleteVisit: (placeId: string, visitId: string) => void;
+  copyTargetGroups: CopyTargetGroup[];
+  currentGroupId: string;
+  onCopyPlaceToGroup: (place: PlaceItem, targetGroupId: string) => Promise<boolean>;
 };
 
 type MapFilterState = {
@@ -371,6 +379,9 @@ export function MapView({
   onAddVisit,
   onEditVisit,
   onDeleteVisit,
+  copyTargetGroups,
+  currentGroupId,
+  onCopyPlaceToGroup,
 }: MapViewProps) {
   const [mapFilters, setMapFilters] =
     useState<MapFilterState>(defaultMapFilters);
@@ -379,6 +390,9 @@ export function MapView({
     useState<google.maps.LatLngLiteral | null>(null);
   const [timelinePlace, setTimelinePlace] = useState<PlaceItem | null>(null);
   const [photoPreview, setPhotoPreview] = useState<PhotoPreviewState>(null);
+  const [copyModalPlace, setCopyModalPlace] = useState<PlaceItem | null>(null);
+  const [selectedCopyGroupId, setSelectedCopyGroupId] = useState("");
+  const [isCopyingPlace, setIsCopyingPlace] = useState(false);
 
   const mapRef = useRef<google.maps.Map | null>(null);
   const hasRequestedLocationRef = useRef(false);
@@ -443,6 +457,10 @@ export function MapView({
   const selectedPlace = useMemo(() => {
     return places.find((place) => place.id === selectedPlaceId) ?? null;
   }, [places, selectedPlaceId]);
+
+  const availableCopyTargetGroups = useMemo(() => {
+    return copyTargetGroups.filter((group) => group.id !== currentGroupId);
+  }, [copyTargetGroups, currentGroupId]);
 
   const allTags = useMemo(() => {
     const tags = new Set<string>();
@@ -613,6 +631,60 @@ export function MapView({
     setTimelinePlace(null);
   }, []);
 
+  const handleOpenCopyModal = useCallback(
+    (place: PlaceItem) => {
+      if (availableCopyTargetGroups.length === 0) {
+        window.alert("目前沒有其他可複製的地圖群。請先建立或加入其他地圖群。");
+        return;
+      }
+
+      setCopyModalPlace(place);
+      setSelectedCopyGroupId(availableCopyTargetGroups[0]?.id ?? "");
+    },
+    [availableCopyTargetGroups],
+  );
+
+  const handleCloseCopyModal = useCallback(() => {
+    if (isCopyingPlace) return;
+
+    setCopyModalPlace(null);
+    setSelectedCopyGroupId("");
+  }, [isCopyingPlace]);
+
+  const handleConfirmCopyPlace = useCallback(async () => {
+    if (!copyModalPlace || !selectedCopyGroupId) return;
+    if (isCopyingPlace) return;
+
+    setIsCopyingPlace(true);
+
+    try {
+      const copied = await onCopyPlaceToGroup(copyModalPlace, selectedCopyGroupId);
+
+      if (!copied) {
+        return;
+      }
+
+      const targetGroupName =
+        availableCopyTargetGroups.find((group) => group.id === selectedCopyGroupId)
+          ?.name ?? "目標群組";
+
+      window.alert(`已複製到「${targetGroupName}」`);
+      setCopyModalPlace(null);
+      setSelectedCopyGroupId("");
+    } catch (error) {
+      console.error(error);
+      window.alert("複製地點失敗，請稍後再試");
+    } finally {
+      setIsCopyingPlace(false);
+    }
+  }, [
+    availableCopyTargetGroups,
+    copyModalPlace,
+    isCopyingPlace,
+    onCopyPlaceToGroup,
+    selectedCopyGroupId,
+  ]);
+
   const handleOpenPhotoPreview = useCallback(
     (photos: string[], index: number) => {
       setPhotoPreview({ photos, index });
@@ -646,7 +718,7 @@ export function MapView({
     });
   }, []);
 
-  const shouldShowFloatingButtons = !selectedPlace && !timelinePlace;
+  const shouldShowFloatingButtons = !selectedPlace && !timelinePlace && !copyModalPlace;
 
   return (
     <section className="relative min-h-0 w-full min-w-0 flex-1">
@@ -921,38 +993,51 @@ export function MapView({
                         {renderRating(selectedPlace.rating)}
                       </div>
 
-                      <div className="mt-auto grid grid-cols-3 gap-2 pt-3">
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            openGoogleMapsDirections(selectedPlace);
-                          }}
-                          className="rounded-xl bg-blue-500 px-2 py-2 text-xs font-bold text-white"
-                        >
-                          🚕 出發
-                        </button>
+                      <div className="mt-auto space-y-2 pt-3">
+                        <div className="grid grid-cols-3 gap-2">
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              openGoogleMapsDirections(selectedPlace);
+                            }}
+                            className="rounded-xl bg-blue-500 px-2 py-2 text-xs font-bold text-white"
+                          >
+                            🚕 出發
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              onAddVisit(selectedPlace);
+                            }}
+                            className="rounded-xl bg-orange-500 px-2 py-2 text-xs font-bold text-white"
+                          >
+                            ＋回憶
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              onEditPlace(selectedPlace);
+                            }}
+                            className="rounded-xl bg-slate-200 px-2 py-2 text-xs font-bold text-slate-700"
+                          >
+                            📝 編輯
+                          </button>
+                        </div>
 
                         <button
                           type="button"
                           onClick={(event) => {
                             event.stopPropagation();
-                            onAddVisit(selectedPlace);
+                            handleOpenCopyModal(selectedPlace);
                           }}
-                          className="rounded-xl bg-orange-500 px-2 py-2 text-xs font-bold text-white"
+                          className="w-full rounded-xl bg-amber-100 px-2 py-2 text-xs font-bold text-amber-700"
                         >
-                          ＋回憶
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            onEditPlace(selectedPlace);
-                          }}
-                          className="rounded-xl bg-slate-200 px-2 py-2 text-xs font-bold text-slate-700"
-                        >
-                          📝 編輯
+                          📋 複製到其他群組
                         </button>
                       </div>
                     </div>
@@ -1092,6 +1177,73 @@ export function MapView({
                         );
                       })}
                     </div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {copyModalPlace ? (
+              <div
+                className="fixed inset-0 z-[85] flex items-end justify-center bg-black/50 px-3 pb-[calc(6rem+env(safe-area-inset-bottom,0px))] pt-3"
+                onClick={handleCloseCopyModal}
+              >
+                <div
+                  className="w-full max-w-md rounded-3xl bg-white p-4 shadow-2xl"
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <h2 className="text-base font-bold text-slate-900">
+                        複製到其他群組
+                      </h2>
+
+                      <p className="mt-1 truncate text-xs text-slate-500">
+                        {copyModalPlace.name}
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleCloseCopyModal}
+                      disabled={isCopyingPlace}
+                      className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-600 disabled:opacity-50"
+                    >
+                      關閉
+                    </button>
+                  </div>
+
+                  <div className="mt-4 space-y-3">
+                    <label className="block text-sm">
+                      <span className="mb-1 block font-semibold text-slate-800">
+                        目標地圖群
+                      </span>
+
+                      <select
+                        value={selectedCopyGroupId}
+                        onChange={(event) => setSelectedCopyGroupId(event.target.value)}
+                        disabled={isCopyingPlace}
+                        className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 disabled:bg-slate-100"
+                      >
+                        {availableCopyTargetGroups.map((group) => (
+                          <option key={group.id} value={group.id}>
+                            {group.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <div className="rounded-2xl bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
+                      會複製地點資訊、照片、標籤、筆記與適合期間；不會複製回憶紀錄與拜訪次數。
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleConfirmCopyPlace}
+                      disabled={!selectedCopyGroupId || isCopyingPlace}
+                      className="w-full rounded-2xl bg-orange-500 px-4 py-3 text-sm font-bold text-white shadow-lg disabled:bg-slate-400"
+                    >
+                      {isCopyingPlace ? "複製中..." : "確認複製"}
+                    </button>
                   </div>
                 </div>
               </div>
