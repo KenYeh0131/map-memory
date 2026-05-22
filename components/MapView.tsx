@@ -187,9 +187,7 @@ function getTimingDisplayText(item: BestTimingItem, today: string) {
 }
 
 function getNormalizedBestTimings(place: PlaceItem): BestTimingItem[] {
-  const newTimings = Array.isArray(place.bestTimings)
-    ? place.bestTimings
-    : [];
+  const newTimings = Array.isArray(place.bestTimings) ? place.bestTimings : [];
 
   if (newTimings.length > 0) {
     return newTimings;
@@ -224,7 +222,7 @@ function getNormalizedBestTimings(place: PlaceItem): BestTimingItem[] {
 
 function getTimingDisplayInfo(
   place: PlaceItem,
-  today: string
+  today: string,
 ): TimingDisplayInfo {
   const timings = getNormalizedBestTimings(place);
 
@@ -248,8 +246,8 @@ function getTimingDisplayInfo(
 
   const nextTiming = [...timings].sort((a, b) =>
     getTimingItemSortValue(a, today).localeCompare(
-      getTimingItemSortValue(b, today)
-    )
+      getTimingItemSortValue(b, today),
+    ),
   )[0];
 
   return {
@@ -266,93 +264,101 @@ function isBestTimingActive(place: PlaceItem, today: string) {
 function getStatusInfo(status?: string) {
   if (status === "wantToReturn") {
     return {
-      label: "✨ 還想去",
+      label: "❤️ 還想去",
       className: "bg-orange-100 text-orange-600",
-      emptyEmoji: "💖",
-      markerFill: "#f97316",
-      heart: "♡",
+      emptyEmoji: "❤️",
+      markerText: "❤️",
+      markerKind: "emoji" as const,
     };
   }
 
   if (status === "memory") {
     return {
-      label: "🫧 打卡完成",
+      label: "♡ 去過",
       className: "bg-slate-200 text-slate-600",
-      emptyEmoji: "🤍",
-      markerFill: "#94a3b8",
-      heart: "♡",
+      emptyEmoji: "♡",
+      markerText: "♡",
+      markerKind: "outlineHeart" as const,
     };
   }
 
   return {
-    label: "♥ 想去",
+    label: "🤩 想去",
     className: "bg-red-100 text-red-600",
-    emptyEmoji: "🥺",
-    markerFill: "#ef4444",
-    heart: "♥",
+    emptyEmoji: "🤩",
+    markerText: "🤩",
+    markerKind: "emoji" as const,
   };
 }
 
 function buildMarkerIcon(
-  heart: string,
-  fillHex: string,
+  markerText: string,
+  markerKind: "emoji" | "outlineHeart",
   selected: boolean,
-  timingActive: boolean
+  timingActive: boolean,
 ): google.maps.Icon {
-  const dim = selected ? 62 : timingActive ? 58 : 50;
+  const dim = selected ? 58 : timingActive ? 56 : 44;
   const cx = dim / 2;
   const cy = dim / 2;
-  const pinBottom = dim - 3;
-  const glowCircle = timingActive
-    ? `<circle cx="${cx}" cy="${cy}" r="${dim / 2 - 3}" fill="#fde68a" opacity="0.9" />`
+  const fontSize = selected ? 34 : timingActive ? 32 : 28;
+  const shadowOpacity = selected ? 0.28 : 0.22;
+
+  const activeShell = timingActive
+    ? `
+      <circle cx="${cx}" cy="${cy}" r="${dim / 2 - 5}" fill="#fff7ed" opacity="0.98" />
+      <circle cx="${cx}" cy="${cy}" r="${dim / 2 - 6}" fill="none" stroke="#fde68a" stroke-width="2" opacity="0.95" />
+      <circle cx="${cx}" cy="${cy}" r="${dim / 2 - 3}" fill="#fbbf24" opacity="0.18" />
+    `
     : "";
 
-  const sparkle = timingActive
-    ? `<text
-        x="${dim - 12}"
-        y="18"
-        font-size="16"
-        text-anchor="middle"
-        font-family="Arial"
-        font-weight="700"
-        fill="#f59e0b"
-      >✦</text>`
+  const softGlow = timingActive
+    ? `<circle cx="${cx}" cy="${cy}" r="${dim / 2 - 1}" fill="#f59e0b" opacity="0.16" />`
     : "";
+
+  const markerContent =
+    markerKind === "outlineHeart"
+      ? `<text
+          x="${cx}"
+          y="${cy + fontSize * 0.34}"
+          font-size="${fontSize + 5}"
+          text-anchor="middle"
+          font-family="Arial, Helvetica, sans-serif"
+          font-weight="700"
+          fill="#6b7280"
+        >♡</text>`
+      : `<text
+          x="${cx}"
+          y="${cy + fontSize * 0.34}"
+          font-size="${fontSize}"
+          text-anchor="middle"
+          font-family="Apple Color Emoji, Segoe UI Emoji, Noto Color Emoji, Arial, sans-serif"
+        >${markerText}</text>`;
 
   const svg = `
   <svg xmlns="http://www.w3.org/2000/svg" width="${dim}" height="${dim}" viewBox="0 0 ${dim} ${dim}">
-    ${glowCircle}
-    <path
-      d="M${cx} ${pinBottom}
-      C${cx - 12} ${cy + 8},
-      ${cx - 18} ${cy},
-      ${cx - 18} ${cy - 8}
-      A18 18 0 1 1 ${cx + 18} ${cy - 8}
-      C${cx + 18} ${cy},
-      ${cx + 12} ${cy + 8},
-      ${cx} ${pinBottom} Z"
-      fill="${fillHex}"
-      stroke="${timingActive ? "#facc15" : "white"}"
-      stroke-width="${timingActive ? "5" : "3"}"
-    />
-    <text
-      x="${cx}"
-      y="${cy + 4}"
-      font-size="20"
-      text-anchor="middle"
-      font-family="Arial"
-      font-weight="700"
-      fill="white"
-    >
-      ${heart}
-    </text>
-    ${sparkle}
+    <defs>
+      <filter id="markerShadow" x="-45%" y="-45%" width="190%" height="190%">
+        <feDropShadow dx="0" dy="5" stdDeviation="3" flood-color="#0f172a" flood-opacity="${shadowOpacity}"/>
+      </filter>
+      <filter id="activeGlow" x="-60%" y="-60%" width="220%" height="220%">
+        <feGaussianBlur stdDeviation="4" result="blur"/>
+        <feMerge>
+          <feMergeNode in="blur"/>
+          <feMergeNode in="SourceGraphic"/>
+        </feMerge>
+      </filter>
+    </defs>
+    ${softGlow}
+    <g filter="${timingActive ? "url(#activeGlow)" : "url(#markerShadow)"}">
+      ${activeShell}
+      ${markerContent}
+    </g>
   </svg>`;
 
   return {
     url: `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`,
     scaledSize: new google.maps.Size(dim, dim),
-    anchor: new google.maps.Point(dim / 2, dim - 2),
+    anchor: new google.maps.Point(dim / 2, dim / 2),
   };
 }
 
@@ -392,7 +398,7 @@ export function MapView({
       lat: 25.033964,
       lng: 121.564468,
     }),
-    []
+    [],
   );
 
   const mapOptions = useMemo<google.maps.MapOptions>(
@@ -403,7 +409,7 @@ export function MapView({
       zoomControl: false,
       gestureHandling: "greedy",
     }),
-    []
+    [],
   );
 
   useEffect(() => {
@@ -430,7 +436,7 @@ export function MapView({
       },
       () => {
         console.log("定位失敗");
-      }
+      },
     );
   }, [isLoaded]);
 
@@ -508,7 +514,7 @@ export function MapView({
     if (!timelinePlace?.visits) return [];
 
     return [...timelinePlace.visits].sort((a, b) =>
-      b.visitDate.localeCompare(a.visitDate)
+      b.visitDate.localeCompare(a.visitDate),
     );
   }, [timelinePlace]);
 
@@ -526,11 +532,11 @@ export function MapView({
       nextIcons.set(
         place.id,
         buildMarkerIcon(
-          info.heart,
-          info.markerFill,
+          info.markerText,
+          info.markerKind,
           selectedPlaceId === place.id,
-          timingActive
-        )
+          timingActive,
+        ),
       );
     });
 
@@ -569,7 +575,7 @@ export function MapView({
         () => {
           map.panTo(mapCenter);
           map.setZoom(11);
-        }
+        },
       );
     } else {
       map.panTo(mapCenter);
@@ -611,7 +617,7 @@ export function MapView({
     (photos: string[], index: number) => {
       setPhotoPreview({ photos, index });
     },
-    []
+    [],
   );
 
   const handleClosePhotoPreview = useCallback(() => {
@@ -722,7 +728,7 @@ export function MapView({
                             : "bg-slate-100 text-slate-400"
                         }`}
                       >
-                        ♥ 想去
+                        ❤️ 想去
                       </button>
 
                       <button
@@ -739,7 +745,7 @@ export function MapView({
                             : "bg-slate-100 text-slate-400"
                         }`}
                       >
-                        ✨ 還想去
+                        🤩 還想去
                       </button>
 
                       <button
@@ -756,7 +762,7 @@ export function MapView({
                             : "bg-slate-100 text-slate-400"
                         }`}
                       >
-                        🫧 打卡完成
+                        ♡ 去過
                       </button>
                     </div>
 
@@ -971,9 +977,7 @@ export function MapView({
                           {timelinePlace.name}
                         </h2>
 
-                        <p className="mt-1 text-sm text-slate-500">
-                          地圖回憶
-                        </p>
+                        <p className="mt-1 text-sm text-slate-500">地圖回憶</p>
                       </div>
 
                       <button

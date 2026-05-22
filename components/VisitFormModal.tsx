@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { getDownloadURL, ref, uploadBytesResumable } from "firebase/storage";
 import { storage } from "@/lib/firebase";
 import { RATING_OPTIONS } from "@/lib/places";
 
@@ -24,8 +24,116 @@ type VisitFormModalProps = {
 const MAX_PHOTOS = 10;
 const PREVIEW_LIMIT = 3;
 
+type UploadStatus = {
+  stage: "idle" | "preview" | "compressing" | "uploading" | "done" | "error";
+  progress: number;
+  message: string;
+};
+
+const idleUploadStatus: UploadStatus = {
+  stage: "idle",
+  progress: 0,
+  message: "",
+};
+
 function todayText() {
   return new Date().toISOString().slice(0, 10);
+}
+
+function loadImageFromObjectUrl(url: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = url;
+  });
+}
+
+async function compressImage(file: File): Promise<File> {
+  const objectUrl = URL.createObjectURL(file);
+
+  try {
+    const img = await loadImageFromObjectUrl(objectUrl);
+    const maxSize = 1600;
+
+    let width = img.naturalWidth || img.width;
+    let height = img.naturalHeight || img.height;
+
+    if (width > height && width > maxSize) {
+      height = Math.round((height * maxSize) / width);
+      width = maxSize;
+    } else if (height > maxSize) {
+      width = Math.round((width * maxSize) / height);
+      height = maxSize;
+    }
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+
+    const ctx = canvas.getContext("2d", { alpha: false });
+
+    if (!ctx) {
+      throw new Error("Canvas context not found");
+    }
+
+    ctx.drawImage(img, 0, 0, width, height);
+
+    const blob = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob(
+        (nextBlob) => {
+          if (!nextBlob) {
+            reject(new Error("Compression failed"));
+            return;
+          }
+
+          resolve(nextBlob);
+        },
+        "image/webp",
+        0.75,
+      );
+    });
+
+    return new File([blob], file.name.replace(/\.[^.]+$/, ".webp"), {
+      type: "image/webp",
+    });
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+function uploadFileWithProgress(
+  file: File,
+  folder: string,
+  onProgress: (progress: number) => void,
+): Promise<string> {
+  const safeFileName = file.name.replace(/[^\w.\-]/g, "_");
+  const fileName = `${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2)}-${safeFileName}`;
+  const storageRef = ref(storage, `${folder}/${fileName}`);
+  const task = uploadBytesResumable(storageRef, file, {
+    contentType: file.type || "image/webp",
+  });
+
+  return new Promise((resolve, reject) => {
+    task.on(
+      "state_changed",
+      (snapshot) => {
+        const progress = snapshot.totalBytes
+          ? Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100)
+          : 0;
+
+        onProgress(progress);
+      },
+      reject,
+      async () => {
+        const downloadUrl = await getDownloadURL(task.snapshot.ref);
+        resolve(downloadUrl);
+      },
+    );
+  });
 }
 
 function isFutureDate(dateText: string) {
@@ -46,6 +154,8 @@ export function VisitFormModal({
   const [rating, setRating] = useState<number>(0);
   const [isUploading, setIsUploading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [uploadStatus, setUploadStatus] =
+    useState<UploadStatus>(idleUploadStatus);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -53,7 +163,9 @@ export function VisitFormModal({
     if (mode === "edit" && initialValues) {
       setVisitDate(initialValues.visitDate || todayText());
       setNote(initialValues.note || "");
-      setPhotos(Array.isArray(initialValues.photos) ? initialValues.photos : []);
+      setPhotos(
+        Array.isArray(initialValues.photos) ? initialValues.photos : [],
+      );
       setRating(initialValues.rating ?? 0);
     } else {
       setVisitDate(todayText());
@@ -64,6 +176,7 @@ export function VisitFormModal({
 
     setIsUploading(false);
     setIsSaving(false);
+    setUploadStatus(idleUploadStatus);
   }, [isOpen, mode, initialValues]);
 
   const previewPhotos = useMemo(() => {
@@ -77,7 +190,7 @@ export function VisitFormModal({
   if (!isOpen) return null;
 
   const handlePhotoUpload = async (files: FileList | null) => {
-    if (!files) return;
+    if (!files || files.length === 0) return;
 
     const remain = Math.max(0, MAX_PHOTOS - photos.length);
 
@@ -87,32 +200,86 @@ export function VisitFormModal({
     }
 
     const selectedFiles = Array.from(files).slice(0, remain);
+    const localPreviewUrls = selectedFiles.map((file) =>
+      URL.createObjectURL(file),
+    );
 
     setIsUploading(true);
+    setUploadStatus({
+      stage: "preview",
+      progress: 5,
+      message: "建立照片預覽中...",
+    });
+
+    setPhotos((prev) => [...prev, ...localPreviewUrls].slice(0, MAX_PHOTOS));
 
     try {
-      const uploadedUrls = await Promise.all(
-        selectedFiles.map(async (file) => {
-          const safeFileName = file.name.replace(/[^\w.\-]/g, "_");
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
 
-          const fileName = `${Date.now()}-${Math.random()
-            .toString(36)
-            .slice(2)}-${safeFileName}`;
+      const uploadedUrls: string[] = [];
 
-          const storageRef = ref(storage, `visits/${fileName}`);
+      for (let index = 0; index < selectedFiles.length; index += 1) {
+        const file = selectedFiles[index];
+        const baseProgress = Math.round((index / selectedFiles.length) * 100);
 
-          await uploadBytes(storageRef, file);
+        setUploadStatus({
+          stage: "compressing",
+          progress: Math.max(10, baseProgress),
+          message: `照片壓縮中... ${index + 1}/${selectedFiles.length}`,
+        });
 
-          return await getDownloadURL(storageRef);
-        })
-      );
+        const compressedFile = await compressImage(file);
 
-      setPhotos((prev) => [...prev, ...uploadedUrls].slice(0, MAX_PHOTOS));
+        const downloadUrl = await uploadFileWithProgress(
+          compressedFile,
+          "visits",
+          (progress) => {
+            const totalProgress = Math.round(
+              ((index + progress / 100) / selectedFiles.length) * 100,
+            );
+
+            setUploadStatus({
+              stage: "uploading",
+              progress: Math.max(10, totalProgress),
+              message: `照片上傳中... ${index + 1}/${selectedFiles.length}（${progress}%）`,
+            });
+          },
+        );
+
+        uploadedUrls.push(downloadUrl);
+      }
+
+      setPhotos((prev) => {
+        const withoutLocalPreview = prev.filter(
+          (photo) => !localPreviewUrls.includes(photo),
+        );
+
+        return [...withoutLocalPreview, ...uploadedUrls].slice(0, MAX_PHOTOS);
+      });
+
+      setUploadStatus({
+        stage: "done",
+        progress: 100,
+        message: "照片上傳完成",
+      });
     } catch (error) {
       console.error(error);
+      setPhotos((prev) =>
+        prev.filter((photo) => !localPreviewUrls.includes(photo)),
+      );
+      setUploadStatus({
+        stage: "error",
+        progress: 0,
+        message: "照片上傳失敗，請重新上傳",
+      });
       window.alert("照片上傳失敗");
     } finally {
       setIsUploading(false);
+
+      window.setTimeout(() => {
+        localPreviewUrls.forEach((url) => URL.revokeObjectURL(url));
+        setUploadStatus(idleUploadStatus);
+      }, 1200);
     }
   };
 
@@ -242,12 +409,25 @@ export function VisitFormModal({
                   <div className="text-3xl">📸</div>
 
                   <div className="mt-2 text-sm font-bold text-orange-600">
-                    {isUploading ? "照片上傳中..." : "新增回憶照片"}
+                    {isUploading
+                      ? uploadStatus.message || "照片上傳中..."
+                      : "新增回憶照片"}
                   </div>
 
                   <div className="mt-1 text-xs text-slate-500">
                     最多 {MAX_PHOTOS} 張
                   </div>
+
+                  {uploadStatus.stage !== "idle" ? (
+                    <div className="mt-3 w-44">
+                      <div className="h-2 overflow-hidden rounded-full bg-orange-100">
+                        <div
+                          className="h-full rounded-full bg-orange-500 transition-all duration-200"
+                          style={{ width: `${uploadStatus.progress}%` }}
+                        />
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
 
                 <input
@@ -304,11 +484,7 @@ export function VisitFormModal({
             disabled={isUploading || isSaving}
             className="w-full rounded-2xl bg-orange-500 px-4 py-3 text-sm font-bold text-white shadow-lg disabled:bg-slate-400"
           >
-            {isSaving
-              ? "儲存中..."
-              : mode === "edit"
-              ? "更新回憶"
-              : "儲存回憶"}
+            {isSaving ? "儲存中..." : mode === "edit" ? "更新回憶" : "儲存回憶"}
           </button>
         </div>
       </div>

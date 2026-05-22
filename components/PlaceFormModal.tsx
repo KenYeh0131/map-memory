@@ -2,7 +2,7 @@
 
 import { useMemo, useRef, useState } from "react";
 import { Autocomplete, useJsApiLoader } from "@react-google-maps/api";
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { getDownloadURL, ref, uploadBytesResumable } from "firebase/storage";
 import { storage } from "@/lib/firebase";
 import {
   RATING_OPTIONS,
@@ -49,68 +49,113 @@ const inputClassName =
 
 const labelTitleClassName = "mb-1 block font-semibold text-slate-800";
 const PLACE_PHOTO_LIMIT = 1;
+
+type UploadStatus = {
+  stage: "idle" | "preview" | "compressing" | "uploading" | "done" | "error";
+  progress: number;
+  message: string;
+};
+
+const idleUploadStatus: UploadStatus = {
+  stage: "idle",
+  progress: 0,
+  message: "",
+};
 const MONTH_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] as const;
 
-async function compressImage(file: File): Promise<File> {
+function loadImageFromObjectUrl(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
-    const reader = new FileReader();
 
-    reader.onload = (event) => {
-      img.src = event.target?.result as string;
-    };
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = url;
+  });
+}
 
-    reader.onerror = reject;
+async function compressImage(file: File): Promise<File> {
+  const objectUrl = URL.createObjectURL(file);
 
-    img.onload = () => {
-      const maxSize = 1600;
+  try {
+    const img = await loadImageFromObjectUrl(objectUrl);
+    const maxSize = 1600;
 
-      let width = img.width;
-      let height = img.height;
+    let width = img.naturalWidth || img.width;
+    let height = img.naturalHeight || img.height;
 
-      if (width > height && width > maxSize) {
-        height = Math.round((height * maxSize) / width);
-        width = maxSize;
-      } else if (height > maxSize) {
-        width = Math.round((width * maxSize) / height);
-        height = maxSize;
-      }
+    if (width > height && width > maxSize) {
+      height = Math.round((height * maxSize) / width);
+      width = maxSize;
+    } else if (height > maxSize) {
+      width = Math.round((width * maxSize) / height);
+      height = maxSize;
+    }
 
-      const canvas = document.createElement("canvas");
-      canvas.width = width;
-      canvas.height = height;
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
 
-      const ctx = canvas.getContext("2d");
+    const ctx = canvas.getContext("2d", { alpha: false });
 
-      if (!ctx) {
-        reject(new Error("Canvas context not found"));
-        return;
-      }
+    if (!ctx) {
+      throw new Error("Canvas context not found");
+    }
 
-      ctx.drawImage(img, 0, 0, width, height);
+    ctx.drawImage(img, 0, 0, width, height);
 
+    const blob = await new Promise<Blob>((resolve, reject) => {
       canvas.toBlob(
-        (blob) => {
-          if (!blob) {
+        (nextBlob) => {
+          if (!nextBlob) {
             reject(new Error("Compression failed"));
             return;
           }
 
-          const compressedFile = new File(
-            [blob],
-            file.name.replace(/\.[^.]+$/, ".webp"),
-            { type: "image/webp" }
-          );
-
-          resolve(compressedFile);
+          resolve(nextBlob);
         },
         "image/webp",
-        0.75
+        0.75,
       );
-    };
+    });
 
-    img.onerror = reject;
-    reader.readAsDataURL(file);
+    return new File([blob], file.name.replace(/\.[^.]+$/, ".webp"), {
+      type: "image/webp",
+    });
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+function uploadFileWithProgress(
+  file: File,
+  folder: string,
+  onProgress: (progress: number) => void,
+): Promise<string> {
+  const safeFileName = file.name.replace(/[^\w.\-]/g, "_");
+  const fileName = `${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2)}-${safeFileName}`;
+  const storageRef = ref(storage, `${folder}/${fileName}`);
+  const task = uploadBytesResumable(storageRef, file, {
+    contentType: file.type || "image/webp",
+  });
+
+  return new Promise((resolve, reject) => {
+    task.on(
+      "state_changed",
+      (snapshot) => {
+        const progress = snapshot.totalBytes
+          ? Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100)
+          : 0;
+
+        onProgress(progress);
+      },
+      reject,
+      async () => {
+        const downloadUrl = await getDownloadURL(task.snapshot.ref);
+        resolve(downloadUrl);
+      },
+    );
   });
 }
 
@@ -162,7 +207,9 @@ function normalizeBestTimings(bestTimings: BestTimingItem[]) {
     });
 }
 
-function migrateOldBestTiming(initialPlace: PlaceItem | null): BestTimingItem[] {
+function migrateOldBestTiming(
+  initialPlace: PlaceItem | null,
+): BestTimingItem[] {
   if (!initialPlace) return [];
 
   if (Array.isArray(initialPlace.bestTimings)) {
@@ -229,8 +276,9 @@ export function PlaceFormModal({
   onClose,
   onSubmit,
 }: PlaceFormModalProps) {
-  const addressAutocompleteRef =
-    useRef<google.maps.places.Autocomplete | null>(null);
+  const addressAutocompleteRef = useRef<google.maps.places.Autocomplete | null>(
+    null,
+  );
   const navigationAutocompleteRef =
     useRef<google.maps.places.Autocomplete | null>(null);
 
@@ -244,20 +292,22 @@ export function PlaceFormModal({
 
   const [previewPhoto, setPreviewPhoto] = useState<PhotoPreviewState>(null);
   const [formValues, setFormValues] = useState<PlaceFormValues>(() =>
-    buildInitialValues(initialPlace)
+    buildInitialValues(initialPlace),
   );
   const [newTagText, setNewTagText] = useState("");
   const [errors, setErrors] = useState<{ name?: string; address?: string }>({});
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
+  const [uploadStatus, setUploadStatus] =
+    useState<UploadStatus>(idleUploadStatus);
 
   const title = useMemo(
     () => (mode === "create" ? "新增地點" : "編輯地點"),
-    [mode]
+    [mode],
   );
 
   const selectedTags = useMemo(
     () => parseTags(formValues.tagsText),
-    [formValues.tagsText]
+    [formValues.tagsText],
   );
 
   const tagOptions = useMemo(() => {
@@ -273,7 +323,7 @@ export function PlaceFormModal({
 
   const handleChange = <K extends keyof PlaceFormValues>(
     key: K,
-    value: PlaceFormValues[K]
+    value: PlaceFormValues[K],
   ) => {
     setFormValues((prev) => ({ ...prev, [key]: value }));
   };
@@ -314,12 +364,12 @@ export function PlaceFormModal({
   const updateBestTimingItem = <K extends keyof BestTimingItem>(
     timingId: string,
     key: K,
-    value: BestTimingItem[K]
+    value: BestTimingItem[K],
   ) => {
     setFormValues((prev) => ({
       ...prev,
       bestTimings: prev.bestTimings.map((item) =>
-        item.id === timingId ? { ...item, [key]: value } : item
+        item.id === timingId ? { ...item, [key]: value } : item,
       ),
     }));
   };
@@ -373,7 +423,9 @@ export function PlaceFormModal({
       navigationTarget:
         place.name
           ?.replace(/[^\u4e00-\u9fa5（）()、・．.－\-\s]/g, "")
-          .trim() || place.name || prev.navigationTarget,
+          .trim() ||
+        place.name ||
+        prev.navigationTarget,
       lat,
       lng,
     }));
@@ -392,7 +444,9 @@ export function PlaceFormModal({
       navigationTarget:
         place.name
           ?.replace(/[^\u4e00-\u9fa5（）()、・．.－\-\s]/g, "")
-          .trim() || place.name || prev.navigationTarget,
+          .trim() ||
+        place.name ||
+        prev.navigationTarget,
     }));
   };
 
@@ -413,7 +467,7 @@ export function PlaceFormModal({
     syncTags(
       selectedTags.includes(tag)
         ? selectedTags.filter((item) => item !== tag)
-        : [...selectedTags, tag]
+        : [...selectedTags, tag],
     );
   };
 
@@ -451,7 +505,7 @@ export function PlaceFormModal({
         ? 0
         : Math.min(
             Math.max(formValues.coverPhotoIndex, 0),
-            formValues.photos.length - 1
+            formValues.photos.length - 1,
           );
 
     await onSubmit({
@@ -471,38 +525,83 @@ export function PlaceFormModal({
       return;
     }
 
-    const selectedFiles = Array.from(files).slice(0, PLACE_PHOTO_LIMIT);
+    const selectedFile = Array.from(files)[0];
+    const localPreviewUrl = URL.createObjectURL(selectedFile);
 
     setIsUploadingPhoto(true);
+    setUploadStatus({
+      stage: "preview",
+      progress: 5,
+      message: "建立照片預覽中...",
+    });
+
+    setFormValues((prev) => ({
+      ...prev,
+      photos: [localPreviewUrl],
+      coverPhotoIndex: 0,
+    }));
 
     try {
-      const uploadedUrls = await Promise.all(
-        selectedFiles.map(async (file) => {
-          const compressedFile = await compressImage(file);
-          const safeFileName = compressedFile.name.replace(/[^\w.\-]/g, "_");
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
 
-          const fileName = `${Date.now()}-${Math.random()
-            .toString(36)
-            .slice(2)}-${safeFileName}`;
+      setUploadStatus({
+        stage: "compressing",
+        progress: 15,
+        message: "照片壓縮中...",
+      });
 
-          const storageRef = ref(storage, `places/${fileName}`);
+      const compressedFile = await compressImage(selectedFile);
 
-          await uploadBytes(storageRef, compressedFile);
+      setUploadStatus({
+        stage: "uploading",
+        progress: 25,
+        message: "照片上傳中...",
+      });
 
-          return await getDownloadURL(storageRef);
-        })
+      const downloadUrl = await uploadFileWithProgress(
+        compressedFile,
+        "places",
+        (progress) => {
+          setUploadStatus({
+            stage: "uploading",
+            progress: Math.max(25, progress),
+            message: `照片上傳中... ${progress}%`,
+          });
+        },
       );
 
       setFormValues((prev) => ({
         ...prev,
-        photos: uploadedUrls.slice(0, PLACE_PHOTO_LIMIT),
+        photos: [downloadUrl],
         coverPhotoIndex: 0,
       }));
+
+      setUploadStatus({
+        stage: "done",
+        progress: 100,
+        message: "照片上傳完成",
+      });
     } catch (error) {
       console.error(error);
+      URL.revokeObjectURL(localPreviewUrl);
+      setFormValues((prev) => ({
+        ...prev,
+        photos: [],
+        coverPhotoIndex: 0,
+      }));
+      setUploadStatus({
+        stage: "error",
+        progress: 0,
+        message: "照片上傳失敗，請重新上傳",
+      });
       window.alert("照片上傳失敗，請稍後再試");
     } finally {
       setIsUploadingPhoto(false);
+
+      window.setTimeout(() => {
+        URL.revokeObjectURL(localPreviewUrl);
+        setUploadStatus(idleUploadStatus);
+      }, 1200);
     }
   };
 
@@ -537,7 +636,7 @@ export function PlaceFormModal({
             ...prev,
             index: (prev.index - 1 + prev.photos.length) % prev.photos.length,
           }
-        : prev
+        : prev,
     );
   };
 
@@ -548,101 +647,111 @@ export function PlaceFormModal({
             ...prev,
             index: (prev.index + 1) % prev.photos.length,
           }
-        : prev
+        : prev,
     );
   };
 
   return (
-    <div className="fixed inset-0 z-[200] flex items-end justify-center bg-slate-900/50 p-3">
-      <div className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-md flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+    <div className="fixed inset-0 z-[250] flex items-end justify-center bg-slate-900/50 px-3 pb-[calc(6rem+env(safe-area-inset-bottom,0px))] pt-3">
+      <div className="flex max-h-[calc(100dvh-7rem)] w-full max-w-md flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
         <div className="shrink-0 p-4 pb-2">
           <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-lg font-bold text-slate-900">{title}</h2>
+            <h2 className="text-lg font-bold text-slate-900">{title}</h2>
 
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md px-2 py-1 text-sm font-semibold text-slate-700"
-          >
-            關閉
-          </button>
-            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-md px-2 py-1 text-sm font-semibold text-slate-700"
+            >
+              關閉
+            </button>
           </div>
+        </div>
 
         <div className="flex-1 overflow-y-auto px-4 pb-4">
-         <div className="space-y-3 text-slate-800">
-          <label className="block text-sm">
-            <span className={labelTitleClassName}>
-              地點名稱
-              <span className="ml-1 font-bold text-red-500">(必填)</span>
-            </span>
-
-            <input
-              value={formValues.name}
-              onChange={(event) => handleChange("name", event.target.value)}
-              className={inputClassName}
-            />
-
-            {errors.name ? (
-              <span className="mt-1 block text-xs font-semibold text-rose-600">
-                {errors.name}
-              </span>
-            ) : null}
-          </label>
-
-          <label className="block text-sm">
-            <span className={labelTitleClassName}>
-              狀態
-              <span className="ml-1 font-bold text-red-500">(必填)</span>
-            </span>
-
-            <select
-              value={formValues.status}
-              onChange={(event) =>
-                handleStatusChange(event.target.value as PlaceStatus)
-              }
-              className={inputClassName}
-            >
-              {STATUS_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          {formValues.status === "wantToReturn" ? (
+          <div className="space-y-3 text-slate-800">
             <label className="block text-sm">
-              <span className={labelTitleClassName}>完成日期</span>
+              <span className={labelTitleClassName}>
+                地點名稱
+                <span className="ml-1 font-bold text-red-500">(必填)</span>
+              </span>
 
               <input
-                type="date"
-                value={formValues.completedDate || todayText()}
-                onChange={(event) =>
-                  handleChange("completedDate", event.target.value)
-                }
+                value={formValues.name}
+                onChange={(event) => handleChange("name", event.target.value)}
                 className={inputClassName}
               />
+
+              {errors.name ? (
+                <span className="mt-1 block text-xs font-semibold text-rose-600">
+                  {errors.name}
+                </span>
+              ) : null}
             </label>
-          ) : null}
 
-          <label className="block text-sm">
-            <span className={labelTitleClassName}>
-              地址
-              <span className="ml-1 font-bold text-red-500">(必填)</span>
-            </span>
+            <label className="block text-sm">
+              <span className={labelTitleClassName}>
+                狀態
+                <span className="ml-1 font-bold text-red-500">(必填)</span>
+              </span>
 
-            {isLoaded ? (
-              <Autocomplete
-                onLoad={(autocomplete) => {
-                  addressAutocompleteRef.current = autocomplete;
-                }}
-                onPlaceChanged={handleAddressPlaceChanged}
-                options={{
-                  fields: ["name", "formatted_address", "geometry.location"],
-                  componentRestrictions: { country: "tw" },
-                }}
+              <select
+                value={formValues.status}
+                onChange={(event) =>
+                  handleStatusChange(event.target.value as PlaceStatus)
+                }
+                className={inputClassName}
               >
+                {STATUS_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            {formValues.status === "wantToReturn" ? (
+              <label className="block text-sm">
+                <span className={labelTitleClassName}>完成日期</span>
+
+                <input
+                  type="date"
+                  value={formValues.completedDate || todayText()}
+                  onChange={(event) =>
+                    handleChange("completedDate", event.target.value)
+                  }
+                  className={inputClassName}
+                />
+              </label>
+            ) : null}
+
+            <label className="block text-sm">
+              <span className={labelTitleClassName}>
+                地址
+                <span className="ml-1 font-bold text-red-500">(必填)</span>
+              </span>
+
+              {isLoaded ? (
+                <Autocomplete
+                  onLoad={(autocomplete) => {
+                    addressAutocompleteRef.current = autocomplete;
+                  }}
+                  onPlaceChanged={handleAddressPlaceChanged}
+                  options={{
+                    fields: ["name", "formatted_address", "geometry.location"],
+                    componentRestrictions: { country: "tw" },
+                  }}
+                >
+                  <input
+                    value={formValues.address}
+                    onChange={(event) =>
+                      handleChange("address", event.target.value)
+                    }
+                    placeholder="輸入地址或地標，例如：淡水漁人碼頭"
+                    className={inputClassName}
+                  />
+                </Autocomplete>
+              ) : (
                 <input
                   value={formValues.address}
                   onChange={(event) =>
@@ -651,371 +760,382 @@ export function PlaceFormModal({
                   placeholder="輸入地址或地標，例如：淡水漁人碼頭"
                   className={inputClassName}
                 />
-              </Autocomplete>
-            ) : (
-              <input
-                value={formValues.address}
+              )}
+
+              {errors.address ? (
+                <span className="mt-1 block text-xs font-semibold text-rose-600">
+                  {errors.address}
+                </span>
+              ) : null}
+
+              {formValues.lat && formValues.lng ? (
+                <span className="mt-1 block text-[11px] font-medium text-slate-600">
+                  已取得位置：{formValues.lat.toFixed(5)},{" "}
+                  {formValues.lng.toFixed(5)}
+                </span>
+              ) : (
+                <span className="mt-1 block text-[11px] font-bold text-amber-600">
+                  請從搜尋建議中選擇地點，才能取得正確地標位置
+                </span>
+              )}
+            </label>
+
+            <label className="block text-sm">
+              <span className={labelTitleClassName}>喜歡程度（0~5）</span>
+
+              <select
+                value={formValues.rating}
                 onChange={(event) =>
-                  handleChange("address", event.target.value)
+                  handleChange("rating", Number(event.target.value))
                 }
-                placeholder="輸入地址或地標，例如：淡水漁人碼頭"
                 className={inputClassName}
-              />
-            )}
-
-            {errors.address ? (
-              <span className="mt-1 block text-xs font-semibold text-rose-600">
-                {errors.address}
-              </span>
-            ) : null}
-
-            {formValues.lat && formValues.lng ? (
-              <span className="mt-1 block text-[11px] font-medium text-slate-600">
-                已取得位置：{formValues.lat.toFixed(5)},{" "}
-                {formValues.lng.toFixed(5)}
-              </span>
-            ) : (
-              <span className="mt-1 block text-[11px] font-bold text-amber-600">
-                請從搜尋建議中選擇地點，才能取得正確地標位置
-              </span>
-            )}
-          </label>
-
-          <label className="block text-sm">
-            <span className={labelTitleClassName}>喜歡程度（0~5）</span>
-
-            <select
-              value={formValues.rating}
-              onChange={(event) =>
-                handleChange("rating", Number(event.target.value))
-              }
-              className={inputClassName}
-            >
-              {RATING_OPTIONS.map((option) => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <div className="rounded-xl border border-orange-200 bg-orange-50 p-3 text-sm">
-            <div className="mb-2">
-              <div className="font-bold text-slate-900">適合期間提醒</div>
-              <div className="mt-0.5 text-xs text-slate-600">
-                可設定多個月份或日期區間；符合期間時，地圖地標會高亮提醒。
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={handleAddMonthTiming}
-                className="rounded-xl bg-orange-500 px-3 py-2 text-xs font-bold text-white"
               >
-                ＋新增月份提醒
-              </button>
-
-              <button
-                type="button"
-                onClick={handleAddDateRangeTiming}
-                className="rounded-xl bg-amber-500 px-3 py-2 text-xs font-bold text-white"
-              >
-                ＋新增日期區間
-              </button>
-            </div>
-
-            {formValues.bestTimings.length === 0 ? (
-              <div className="mt-3 rounded-xl bg-white px-3 py-2 text-xs font-medium text-slate-500">
-                尚未設定適合期間。
-              </div>
-            ) : (
-              <div className="mt-3 space-y-3">
-                {formValues.bestTimings.map((timing, index) => (
-                  <div
-                    key={timing.id}
-                    className="rounded-xl border border-orange-100 bg-white p-3 shadow-sm"
-                  >
-                    <div className="mb-2 flex items-center justify-between gap-2">
-                      <div className="text-xs font-bold text-orange-600">
-                        {timing.kind === "months"
-                          ? `月份提醒 #${index + 1}`
-                          : `日期區間 #${index + 1}`}
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => deleteBestTimingItem(timing.id)}
-                        className="rounded-full bg-rose-50 px-2 py-1 text-xs font-bold text-rose-600"
-                      >
-                        刪除
-                      </button>
-                    </div>
-
-                    {timing.kind === "months" ? (
-                      <div>
-                        <div className="mb-1 text-xs font-semibold text-slate-700">
-                          適合月份
-                        </div>
-
-                        <div className="grid grid-cols-6 gap-1.5">
-                          {MONTH_OPTIONS.map((month) => {
-                            const checked = timing.months?.includes(month);
-
-                            return (
-                              <button
-                                key={month}
-                                type="button"
-                                onClick={() =>
-                                  toggleBestTimingMonth(timing.id, month)
-                                }
-                                className={`rounded-lg border px-2 py-1.5 text-xs font-bold ${
-                                  checked
-                                    ? "border-orange-500 bg-orange-500 text-white"
-                                    : "border-slate-200 bg-white text-slate-600"
-                                }`}
-                              >
-                                {month}月
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="grid grid-cols-2 gap-2">
-                        <label className="block">
-                          <span className="mb-1 block text-xs font-semibold text-slate-700">
-                            開始日期
-                          </span>
-
-                          <input
-                            type="date"
-                            value={timing.startDate ?? ""}
-                            onChange={(event) =>
-                              updateBestTimingItem(
-                                timing.id,
-                                "startDate",
-                                event.target.value
-                              )
-                            }
-                            className={inputClassName}
-                          />
-                        </label>
-
-                        <label className="block">
-                          <span className="mb-1 block text-xs font-semibold text-slate-700">
-                            結束日期
-                          </span>
-
-                          <input
-                            type="date"
-                            value={timing.endDate ?? ""}
-                            onChange={(event) =>
-                              updateBestTimingItem(
-                                timing.id,
-                                "endDate",
-                                event.target.value
-                              )
-                            }
-                            className={inputClassName}
-                          />
-                        </label>
-                      </div>
-                    )}
-
-                    <label className="mt-3 block">
-                      <span className="mb-1 block text-xs font-semibold text-slate-700">
-                        提醒文字
-                      </span>
-
-                      <input
-                        value={timing.note ?? ""}
-                        onChange={(event) =>
-                          updateBestTimingItem(
-                            timing.id,
-                            "note",
-                            event.target.value
-                          )
-                        }
-                        placeholder="例如：現在最漂亮、建議傍晚去、退潮時比較適合"
-                        className={inputClassName}
-                      />
-                    </label>
-                  </div>
+                {RATING_OPTIONS.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
                 ))}
+              </select>
+            </label>
+
+            <div className="rounded-xl border border-orange-200 bg-orange-50 p-3 text-sm">
+              <div className="mb-2">
+                <div className="font-bold text-slate-900">適合期間提醒</div>
+                <div className="mt-0.5 text-xs text-slate-600">
+                  可設定多個月份或日期區間；符合期間時，地圖地標會高亮提醒。
+                </div>
               </div>
-            )}
-          </div>
 
-          <div className="block text-sm">
-            <span className={labelTitleClassName}>地點照片（最多 1 張）</span>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={handleAddMonthTiming}
+                  className="rounded-xl bg-orange-500 px-3 py-2 text-xs font-bold text-white"
+                >
+                  ＋新增月份提醒
+                </button>
 
-            <label
-  className={`inline-flex cursor-pointer items-center justify-center rounded-lg px-4 py-2 text-sm font-bold text-white ${
-    isUploadingPhoto || formValues.photos.length >= PLACE_PHOTO_LIMIT
-      ? "bg-slate-300"
-      : "bg-orange-500 hover:bg-orange-600"
-  }`}
->
-  選擇檔案
+                <button
+                  type="button"
+                  onClick={handleAddDateRangeTiming}
+                  className="rounded-xl bg-amber-500 px-3 py-2 text-xs font-bold text-white"
+                >
+                  ＋新增日期區間
+                </button>
+              </div>
 
-  <input
-    type="file"
-    accept="image/*"
-    disabled={
-      isUploadingPhoto || formValues.photos.length >= PLACE_PHOTO_LIMIT
-    }
-    onChange={(event) => {
-      handlePhotoUpload(event.target.files).catch(() => {
-        window.alert("照片讀取失敗，請重新上傳");
-      });
-
-      event.target.value = "";
-    }}
-    className="hidden"
-  />
-</label>
-
-            <p className="mt-1 text-xs font-medium text-slate-600">
-              {isUploadingPhoto
-                ? "照片上傳中..."
-                : `已上傳 ${formValues.photos.length}/1`}
-            </p>
-
-            {formValues.photos.length > 0 ? (
-              <div className="mt-2 grid grid-cols-1 gap-2">
-                {formValues.photos.map((photo, index) => {
-                  const isCover = formValues.coverPhotoIndex === index;
-
-                  return (
+              {formValues.bestTimings.length === 0 ? (
+                <div className="mt-3 rounded-xl bg-white px-3 py-2 text-xs font-medium text-slate-500">
+                  尚未設定適合期間。
+                </div>
+              ) : (
+                <div className="mt-3 space-y-3">
+                  {formValues.bestTimings.map((timing, index) => (
                     <div
-                      key={`${photo.slice(0, 32)}-${index}`}
-                      className={`overflow-hidden rounded-lg border bg-slate-100 ${
-                        isCover
-                          ? "border-orange-500 ring-2 ring-orange-200"
-                          : "border-slate-200"
-                      }`}
+                      key={timing.id}
+                      className="rounded-xl border border-orange-100 bg-white p-3 shadow-sm"
                     >
-                      <div className="relative">
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <div className="text-xs font-bold text-orange-600">
+                          {timing.kind === "months"
+                            ? `月份提醒 #${index + 1}`
+                            : `日期區間 #${index + 1}`}
+                        </div>
+
                         <button
                           type="button"
-                          onClick={() =>
-                            setPreviewPhoto({
-                              photos: formValues.photos,
-                              index,
-                            })
+                          onClick={() => deleteBestTimingItem(timing.id)}
+                          className="rounded-full bg-rose-50 px-2 py-1 text-xs font-bold text-rose-600"
+                        >
+                          刪除
+                        </button>
+                      </div>
+
+                      {timing.kind === "months" ? (
+                        <div>
+                          <div className="mb-1 text-xs font-semibold text-slate-700">
+                            適合月份
+                          </div>
+
+                          <div className="grid grid-cols-6 gap-1.5">
+                            {MONTH_OPTIONS.map((month) => {
+                              const checked = timing.months?.includes(month);
+
+                              return (
+                                <button
+                                  key={month}
+                                  type="button"
+                                  onClick={() =>
+                                    toggleBestTimingMonth(timing.id, month)
+                                  }
+                                  className={`rounded-lg border px-2 py-1.5 text-xs font-bold ${
+                                    checked
+                                      ? "border-orange-500 bg-orange-500 text-white"
+                                      : "border-slate-200 bg-white text-slate-600"
+                                  }`}
+                                >
+                                  {month}月
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-2 gap-2">
+                          <label className="block">
+                            <span className="mb-1 block text-xs font-semibold text-slate-700">
+                              開始日期
+                            </span>
+
+                            <input
+                              type="date"
+                              value={timing.startDate ?? ""}
+                              onChange={(event) =>
+                                updateBestTimingItem(
+                                  timing.id,
+                                  "startDate",
+                                  event.target.value,
+                                )
+                              }
+                              className={inputClassName}
+                            />
+                          </label>
+
+                          <label className="block">
+                            <span className="mb-1 block text-xs font-semibold text-slate-700">
+                              結束日期
+                            </span>
+
+                            <input
+                              type="date"
+                              value={timing.endDate ?? ""}
+                              onChange={(event) =>
+                                updateBestTimingItem(
+                                  timing.id,
+                                  "endDate",
+                                  event.target.value,
+                                )
+                              }
+                              className={inputClassName}
+                            />
+                          </label>
+                        </div>
+                      )}
+
+                      <label className="mt-3 block">
+                        <span className="mb-1 block text-xs font-semibold text-slate-700">
+                          提醒文字
+                        </span>
+
+                        <input
+                          value={timing.note ?? ""}
+                          onChange={(event) =>
+                            updateBestTimingItem(
+                              timing.id,
+                              "note",
+                              event.target.value,
+                            )
                           }
-                          className="block w-full"
-                        >
-                          <img
-                            src={photo}
-                            alt={`photo-${index + 1}`}
-                            className="h-40 w-full object-cover"
-                          />
-                        </button>
-
-                        {isCover ? (
-                          <span className="absolute left-1 top-1 rounded-full bg-orange-500 px-1.5 py-0.5 text-[10px] font-bold text-white">
-                            封面
-                          </span>
-                        ) : null}
-
-                        <button
-                          type="button"
-                          onClick={() => handleDeletePhoto(index)}
-                          className="absolute right-1 top-1 rounded-full bg-slate-900/75 px-1.5 py-0.5 text-xs text-white"
-                        >
-                          ✕
-                        </button>
-                      </div>
-
-                      <div className="bg-white px-2 py-1.5 text-center text-[11px] font-semibold text-slate-600">
-                        地點封面照片
-                      </div>
+                          placeholder="例如：現在最漂亮、建議傍晚去、退潮時比較適合"
+                          className={inputClassName}
+                        />
+                      </label>
                     </div>
-                  );
-                })}
-              </div>
-            ) : null}
-          </div>
-
-          <div className="rounded-xl border border-slate-200 bg-white p-3 text-slate-800">
-            <div className="mb-2 flex items-center justify-between">
-              <span className="text-sm font-semibold text-slate-800">
-                標籤（可複選）
-              </span>
-
-              <span className="text-xs font-medium text-slate-600">
-                已選 {selectedTags.length}
-              </span>
+                  ))}
+                </div>
+              )}
             </div>
 
-            {tagOptions.length > 0 ? (
-              <div className="flex flex-wrap gap-1.5">
-                {tagOptions.map((tag) => {
-                  const checked = selectedTags.includes(tag);
+            <div className="block text-sm">
+              <span className={labelTitleClassName}>地點照片（最多 1 張）</span>
 
-                  return (
-                    <button
-                      key={tag}
-                      type="button"
-                      onClick={() => toggleTag(tag)}
-                      className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${
-                        checked
-                          ? "border-slate-900 bg-slate-900 text-white"
-                          : "border-slate-300 bg-slate-50 text-slate-700"
-                      }`}
-                    >
-                      {checked ? "✓ " : ""}
-                      #{tag}
-                    </button>
-                  );
-                })}
-              </div>
-            ) : (
-              <p className="text-xs font-medium text-slate-600">
-                尚無既有標籤，可在下方新增。
-              </p>
-            )}
-
-            <div className="mt-3 flex gap-2">
-              <input
-                value={newTagText}
-                onChange={(event) => setNewTagText(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    addNewTag();
+              <label
+                className={`inline-flex cursor-pointer items-center justify-center rounded-lg px-4 py-2 text-sm font-bold text-white ${
+                  isUploadingPhoto ||
+                  formValues.photos.length >= PLACE_PHOTO_LIMIT
+                    ? "bg-slate-300"
+                    : "bg-orange-500 hover:bg-orange-600"
+                }`}
+              >
+                選擇檔案
+                <input
+                  type="file"
+                  accept="image/*"
+                  disabled={
+                    isUploadingPhoto ||
+                    formValues.photos.length >= PLACE_PHOTO_LIMIT
                   }
-                }}
-                placeholder="新增標籤，例如：咖啡、景點"
-                className="min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 opacity-100 placeholder:text-slate-500"
-              />
+                  onChange={(event) => {
+                    handlePhotoUpload(event.target.files).catch(() => {
+                      window.alert("照片讀取失敗，請重新上傳");
+                    });
 
-              <button
-                type="button"
-                onClick={addNewTag}
-                className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white"
-              >
-                新增
-              </button>
+                    event.target.value = "";
+                  }}
+                  className="hidden"
+                />
+              </label>
+
+              <div className="mt-2 space-y-1">
+                <p className="text-xs font-medium text-slate-600">
+                  {uploadStatus.stage !== "idle"
+                    ? uploadStatus.message
+                    : `已上傳 ${formValues.photos.length}/1`}
+                </p>
+
+                {uploadStatus.stage !== "idle" ? (
+                  <div className="h-2 overflow-hidden rounded-full bg-slate-200">
+                    <div
+                      className="h-full rounded-full bg-orange-500 transition-all duration-200"
+                      style={{ width: `${uploadStatus.progress}%` }}
+                    />
+                  </div>
+                ) : null}
+              </div>
+
+              {formValues.photos.length > 0 ? (
+                <div className="mt-2 grid grid-cols-1 gap-2">
+                  {formValues.photos.map((photo, index) => {
+                    const isCover = formValues.coverPhotoIndex === index;
+
+                    return (
+                      <div
+                        key={`${photo.slice(0, 32)}-${index}`}
+                        className={`overflow-hidden rounded-lg border bg-slate-100 ${
+                          isCover
+                            ? "border-orange-500 ring-2 ring-orange-200"
+                            : "border-slate-200"
+                        }`}
+                      >
+                        <div className="relative">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setPreviewPhoto({
+                                photos: formValues.photos,
+                                index,
+                              })
+                            }
+                            className="block w-full"
+                          >
+                            <img
+                              src={photo}
+                              alt={`photo-${index + 1}`}
+                              className="h-40 w-full object-cover"
+                            />
+                          </button>
+
+                          {isCover ? (
+                            <span className="absolute left-1 top-1 rounded-full bg-orange-500 px-1.5 py-0.5 text-[10px] font-bold text-white">
+                              封面
+                            </span>
+                          ) : null}
+
+                          <button
+                            type="button"
+                            onClick={() => handleDeletePhoto(index)}
+                            className="absolute right-1 top-1 rounded-full bg-slate-900/75 px-1.5 py-0.5 text-xs text-white"
+                          >
+                            ✕
+                          </button>
+                        </div>
+
+                        <div className="bg-white px-2 py-1.5 text-center text-[11px] font-semibold text-slate-600">
+                          地點封面照片
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
             </div>
-          </div>
 
-          <label className="block text-sm">
-            <span className={labelTitleClassName}>導航目標</span>
+            <div className="rounded-xl border border-slate-200 bg-white p-3 text-slate-800">
+              <div className="mb-2 flex items-center justify-between">
+                <span className="text-sm font-semibold text-slate-800">
+                  標籤（可複選）
+                </span>
 
-            {isLoaded ? (
-              <Autocomplete
-                onLoad={(autocomplete) => {
-                  navigationAutocompleteRef.current = autocomplete;
-                }}
-                onPlaceChanged={handleNavigationPlaceChanged}
-                options={{
-                  fields: ["name", "formatted_address", "geometry.location"],
-                  componentRestrictions: { country: "tw" },
-                }}
-              >
+                <span className="text-xs font-medium text-slate-600">
+                  已選 {selectedTags.length}
+                </span>
+              </div>
+
+              {tagOptions.length > 0 ? (
+                <div className="flex flex-wrap gap-1.5">
+                  {tagOptions.map((tag) => {
+                    const checked = selectedTags.includes(tag);
+
+                    return (
+                      <button
+                        key={tag}
+                        type="button"
+                        onClick={() => toggleTag(tag)}
+                        className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${
+                          checked
+                            ? "border-slate-900 bg-slate-900 text-white"
+                            : "border-slate-300 bg-slate-50 text-slate-700"
+                        }`}
+                      >
+                        {checked ? "✓ " : ""}#{tag}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="text-xs font-medium text-slate-600">
+                  尚無既有標籤，可在下方新增。
+                </p>
+              )}
+
+              <div className="mt-3 flex gap-2">
+                <input
+                  value={newTagText}
+                  onChange={(event) => setNewTagText(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      addNewTag();
+                    }
+                  }}
+                  placeholder="新增標籤，例如：咖啡、景點"
+                  className="min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 opacity-100 placeholder:text-slate-500"
+                />
+
+                <button
+                  type="button"
+                  onClick={addNewTag}
+                  className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white"
+                >
+                  新增
+                </button>
+              </div>
+            </div>
+
+            <label className="block text-sm">
+              <span className={labelTitleClassName}>導航目標</span>
+
+              {isLoaded ? (
+                <Autocomplete
+                  onLoad={(autocomplete) => {
+                    navigationAutocompleteRef.current = autocomplete;
+                  }}
+                  onPlaceChanged={handleNavigationPlaceChanged}
+                  options={{
+                    fields: ["name", "formatted_address", "geometry.location"],
+                    componentRestrictions: { country: "tw" },
+                  }}
+                >
+                  <input
+                    value={formValues.navigationTarget}
+                    onChange={(event) =>
+                      handleChange("navigationTarget", event.target.value)
+                    }
+                    placeholder="輸入導航目標，例如：漁人碼頭"
+                    className={inputClassName}
+                  />
+                </Autocomplete>
+              ) : (
                 <input
                   value={formValues.navigationTarget}
                   onChange={(event) =>
@@ -1024,50 +1144,41 @@ export function PlaceFormModal({
                   placeholder="輸入導航目標，例如：漁人碼頭"
                   className={inputClassName}
                 />
-              </Autocomplete>
-            ) : (
-              <input
-                value={formValues.navigationTarget}
-                onChange={(event) =>
-                  handleChange("navigationTarget", event.target.value)
-                }
-                placeholder="輸入導航目標，例如：漁人碼頭"
+              )}
+            </label>
+
+            <label className="block text-sm">
+              <span className={labelTitleClassName}>筆記</span>
+
+              <textarea
+                value={formValues.notes}
+                onChange={(event) => handleChange("notes", event.target.value)}
+                rows={4}
                 className={inputClassName}
               />
-            )}
-          </label>
-
-          <label className="block text-sm">
-            <span className={labelTitleClassName}>筆記</span>
-
-            <textarea
-              value={formValues.notes}
-              onChange={(event) => handleChange("notes", event.target.value)}
-              rows={4}
-              className={inputClassName}
-            />
-          </label>
+            </label>
           </div>
-</div>
+        </div>
 
-<div className="shrink-0 border-t border-slate-100 bg-white p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
-  <button
-    type="button"
-    onClick={handleValidateAndSubmit}
-          disabled={isUploadingPhoto}
-          className="w-full rounded-lg bg-orange-500 px-3 py-3 text-sm font-bold text-white shadow-lg disabled:bg-slate-400"
-        >
-          {isUploadingPhoto
-            ? "照片上傳中..."
-            : mode === "create"
-              ? "新增地點"
-              : "儲存變更"}
-        </button>
+        <div className="shrink-0 border-t border-slate-100 bg-white p-4">
+          <button
+            type="button"
+            onClick={handleValidateAndSubmit}
+            disabled={isUploadingPhoto}
+            className="w-full rounded-lg bg-orange-500 px-3 py-3 text-sm font-bold text-white shadow-lg disabled:bg-slate-400"
+          >
+            {isUploadingPhoto
+              ? "照片上傳中..."
+              : mode === "create"
+                ? "新增地點"
+                : "儲存變更"}
+          </button>
+        </div>
       </div>
 
       {previewPhoto ? (
         <div
-          className="fixed inset-0 z-[220] flex items-center justify-center bg-slate-900/80 p-4"
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/80 p-4"
           onClick={closePreview}
         >
           <div
@@ -1119,7 +1230,6 @@ export function PlaceFormModal({
           </div>
         </div>
       ) : null}
-      </div>
     </div>
   );
 }
