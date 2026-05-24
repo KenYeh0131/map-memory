@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Autocomplete, useJsApiLoader } from "@react-google-maps/api";
 import { getDownloadURL, ref, uploadBytesResumable } from "firebase/storage";
 import { storage } from "@/lib/firebase";
@@ -49,6 +49,9 @@ const inputClassName =
 
 const labelTitleClassName = "mb-1 block font-semibold text-slate-800";
 const PLACE_PHOTO_LIMIT = 1;
+const AUTOCOMPLETE_MIN_LENGTH = 4;
+const AUTOCOMPLETE_DEBOUNCE_MS = 400;
+const PLACE_CACHE_STORAGE_KEY = "map-memory-place-autocomplete-cache-v1";
 
 type UploadStatus = {
   stage: "idle" | "preview" | "compressing" | "uploading" | "done" | "error";
@@ -62,6 +65,61 @@ const idleUploadStatus: UploadStatus = {
   message: "",
 };
 const MONTH_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] as const;
+
+type CachedPlaceInfo = {
+  lat: number;
+  lng: number;
+  navigationTarget: string;
+  address: string;
+  updatedAt: string;
+};
+
+function buildPlaceCacheKey(name: string, address: string) {
+  return `${name.trim().toLowerCase()}__${address.trim().toLowerCase()}`;
+}
+
+function readPlaceCache() {
+  if (typeof window === "undefined") return {} as Record<string, CachedPlaceInfo>;
+
+  try {
+    const raw = window.localStorage.getItem(PLACE_CACHE_STORAGE_KEY);
+    if (!raw) return {} as Record<string, CachedPlaceInfo>;
+
+    const parsed = JSON.parse(raw) as Record<string, CachedPlaceInfo>;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {} as Record<string, CachedPlaceInfo>;
+  }
+}
+
+function readCachedPlace(name: string, address: string) {
+  if (!name.trim() || !address.trim()) return null;
+
+  const cache = readPlaceCache();
+  const cached = cache[buildPlaceCacheKey(name, address)];
+
+  if (!cached) return null;
+  if (typeof cached.lat !== "number" || typeof cached.lng !== "number") return null;
+
+  return cached;
+}
+
+function writeCachedPlace(name: string, address: string, value: Omit<CachedPlaceInfo, "updatedAt">) {
+  if (typeof window === "undefined") return;
+  if (!name.trim() || !address.trim()) return;
+
+  const cache = readPlaceCache();
+  const nextCache = {
+    ...cache,
+    [buildPlaceCacheKey(name, address)]: {
+      ...value,
+      updatedAt: new Date().toISOString(),
+    },
+  };
+
+  window.localStorage.setItem(PLACE_CACHE_STORAGE_KEY, JSON.stringify(nextCache));
+}
+
 
 function loadImageFromObjectUrl(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -276,9 +334,6 @@ export function PlaceFormModal({
   const addressAutocompleteRef = useRef<google.maps.places.Autocomplete | null>(
     null,
   );
-  const navigationAutocompleteRef =
-    useRef<google.maps.places.Autocomplete | null>(null);
-
   const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? "";
 
   const { isLoaded } = useJsApiLoader({
@@ -296,6 +351,37 @@ export function PlaceFormModal({
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const [uploadStatus, setUploadStatus] =
     useState<UploadStatus>(idleUploadStatus);
+  const [debouncedAddress, setDebouncedAddress] = useState(() =>
+    buildInitialValues(initialPlace).address.trim(),
+  );
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedAddress(formValues.address.trim());
+    }, AUTOCOMPLETE_DEBOUNCE_MS);
+
+    return () => window.clearTimeout(timer);
+  }, [formValues.address]);
+
+  useEffect(() => {
+    const cached = readCachedPlace(formValues.name, debouncedAddress);
+
+    if (!cached) return;
+
+    setFormValues((prev) => {
+      if (prev.lat === cached.lat && prev.lng === cached.lng) return prev;
+
+      return {
+        ...prev,
+        lat: cached.lat,
+        lng: cached.lng,
+        navigationTarget: cached.navigationTarget || prev.navigationTarget,
+      };
+    });
+  }, [debouncedAddress, formValues.name]);
+
+  const shouldUseAddressAutocomplete =
+    isLoaded && debouncedAddress.length >= AUTOCOMPLETE_MIN_LENGTH;
 
   const title = useMemo(
     () => (mode === "create" ? "新增地點" : "編輯地點"),
@@ -415,35 +501,50 @@ export function PlaceFormModal({
       return;
     }
 
+    const navigationTarget =
+      place.name
+        ?.replace(/[^\u4e00-\u9fa5（）()、・．.－\-\s]/g, "")
+        .trim() ||
+      place.name ||
+      "";
+    const pickedAddress = place.formatted_address || formValues.address;
+    const placeNameForCache = formValues.name.trim() || navigationTarget;
+
+    writeCachedPlace(placeNameForCache, pickedAddress, {
+      lat,
+      lng,
+      navigationTarget,
+      address: pickedAddress,
+    });
+
     setFormValues((prev) => ({
       ...prev,
-      navigationTarget:
-        place.name
-          ?.replace(/[^\u4e00-\u9fa5（）()、・．.－\-\s]/g, "")
-          .trim() ||
-        place.name ||
-        prev.navigationTarget,
+      address: pickedAddress,
+      navigationTarget: navigationTarget || prev.navigationTarget,
       lat,
       lng,
     }));
   };
 
-  const handleNavigationPlaceChanged = () => {
-    const place = navigationAutocompleteRef.current?.getPlace();
+  const handleAddressInputChange = (nextAddress: string) => {
+    const cached = readCachedPlace(formValues.name, nextAddress);
 
-    if (!place) {
-      window.alert("沒有取得導航地點資料，請重新選擇一次");
+    if (cached) {
+      setFormValues((prev) => ({
+        ...prev,
+        address: nextAddress,
+        lat: cached.lat,
+        lng: cached.lng,
+        navigationTarget: cached.navigationTarget || prev.navigationTarget,
+      }));
       return;
     }
 
     setFormValues((prev) => ({
       ...prev,
-      navigationTarget:
-        place.name
-          ?.replace(/[^\u4e00-\u9fa5（）()、・．.－\-\s]/g, "")
-          .trim() ||
-        place.name ||
-        prev.navigationTarget,
+      address: nextAddress,
+      lat: undefined,
+      lng: undefined,
     }));
   };
 
@@ -725,7 +826,7 @@ export function PlaceFormModal({
                 <span className="ml-1 font-bold text-red-500">(必填)</span>
               </span>
 
-              {isLoaded ? (
+              {shouldUseAddressAutocomplete ? (
                 <Autocomplete
                   onLoad={(autocomplete) => {
                     addressAutocompleteRef.current = autocomplete;
@@ -739,7 +840,7 @@ export function PlaceFormModal({
                   <input
                     value={formValues.address}
                     onChange={(event) =>
-                      handleChange("address", event.target.value)
+                      handleAddressInputChange(event.target.value)
                     }
                     placeholder="輸入地址或地標，例如：淡水漁人碼頭"
                     className={inputClassName}
@@ -749,7 +850,7 @@ export function PlaceFormModal({
                 <input
                   value={formValues.address}
                   onChange={(event) =>
-                    handleChange("address", event.target.value)
+                    handleAddressInputChange(event.target.value)
                   }
                   placeholder="輸入地址或地標，例如：淡水漁人碼頭"
                   className={inputClassName}
@@ -1109,36 +1210,14 @@ export function PlaceFormModal({
             <label className="block text-sm">
               <span className={labelTitleClassName}>導航目標</span>
 
-              {isLoaded ? (
-                <Autocomplete
-                  onLoad={(autocomplete) => {
-                    navigationAutocompleteRef.current = autocomplete;
-                  }}
-                  onPlaceChanged={handleNavigationPlaceChanged}
-                  options={{
-                    fields: ["name", "formatted_address", "geometry.location"],
-                    componentRestrictions: { country: "tw" },
-                  }}
-                >
-                  <input
-                    value={formValues.navigationTarget}
-                    onChange={(event) =>
-                      handleChange("navigationTarget", event.target.value)
-                    }
-                    placeholder="輸入導航目標，例如：漁人碼頭"
-                    className={inputClassName}
-                  />
-                </Autocomplete>
-              ) : (
-                <input
-                  value={formValues.navigationTarget}
-                  onChange={(event) =>
-                    handleChange("navigationTarget", event.target.value)
-                  }
-                  placeholder="輸入導航目標，例如：漁人碼頭"
-                  className={inputClassName}
-                />
-              )}
+              <input
+                value={formValues.navigationTarget}
+                onChange={(event) =>
+                  handleChange("navigationTarget", event.target.value)
+                }
+                placeholder="輸入導航目標，例如：漁人碼頭"
+                className={inputClassName}
+              />
             </label>
 
             <label className="block text-sm">

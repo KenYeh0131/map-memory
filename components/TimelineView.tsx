@@ -1,7 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
-import type { DragEvent } from "react";
+import { useCallback, useMemo, useState } from "react";
 import type { PlaceItem } from "@/lib/places";
 
 type TimelineViewProps = {
@@ -43,7 +42,6 @@ const MONTH_OPTIONS = [
 ] as const;
 
 const PHOTO_LIMIT = 2;
-const LONG_PRESS_MS = 450;
 
 function formatDate(dateText?: string) {
   if (!dateText) return "";
@@ -96,14 +94,6 @@ function getVisitSortValue(item: TimelineItem, fallbackIndex: number) {
   return fallbackIndex;
 }
 
-function canModifyVisit(
-  visit: TimelineItem["visit"],
-  currentDeviceId: string,
-) {
-  if (!visit.authorDeviceId) return true;
-  return visit.authorDeviceId === currentDeviceId;
-}
-
 function moveItem<T>(items: T[], fromIndex: number, toIndex: number) {
   const nextItems = [...items];
   const [target] = nextItems.splice(fromIndex, 1);
@@ -124,10 +114,7 @@ export function TimelineView({
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [photoPreview, setPhotoPreview] = useState<PhotoPreviewState>(null);
-  const [draggingKey, setDraggingKey] = useState<string | null>(null);
-  const [draggingDate, setDraggingDate] = useState<string | null>(null);
-  const [longPressReadyKey, setLongPressReadyKey] = useState<string | null>(null);
-  const longPressTimerRef = useRef<number | null>(null);
+  const [movingVisitKey, setMovingVisitKey] = useState<string | null>(null);
 
   const visibleTags = useMemo(() => {
     return Array.isArray(availableTags)
@@ -158,7 +145,14 @@ export function TimelineView({
             place.address.toLowerCase().includes(q) ||
             place.notes.toLowerCase().includes(q) ||
             (visit.note ?? "").toLowerCase().includes(q) ||
-            (visit.authorName ?? "").toLowerCase().includes(q);
+            (visit.authorName ?? "").toLowerCase().includes(q) ||
+            (Array.isArray(visit.memoryNotes)
+              ? visit.memoryNotes.some(
+                  (memoryNote) =>
+                    (memoryNote.text ?? "").toLowerCase().includes(q) ||
+                    (memoryNote.authorName ?? "").toLowerCase().includes(q),
+                )
+              : false);
 
           if (!matchedKeyword) return false;
         }
@@ -197,19 +191,6 @@ export function TimelineView({
       items.map((item, index) => ({ item, fallbackIndex: index })),
     ] as const);
   }, [timelineItems]);
-
-  const timelineItemsByKey = useMemo(() => {
-    const map = new Map<string, TimelineItem>();
-    timelineItems.forEach((item) => map.set(getVisitKey(item), item));
-    return map;
-  }, [timelineItems]);
-
-  const clearLongPressTimer = useCallback(() => {
-    if (longPressTimerRef.current) {
-      window.clearTimeout(longPressTimerRef.current);
-      longPressTimerRef.current = null;
-    }
-  }, []);
 
   const toggleTag = useCallback((tag: string) => {
     setSelectedTags((prev) =>
@@ -253,85 +234,37 @@ export function TimelineView({
     });
   }, []);
 
-  const handlePointerDownForDrag = useCallback(
-    (visitKey: string) => {
-      clearLongPressTimer();
-      longPressTimerRef.current = window.setTimeout(() => {
-        setLongPressReadyKey(visitKey);
-        navigator.vibrate?.(25);
-      }, LONG_PRESS_MS);
-    },
-    [clearLongPressTimer],
-  );
-
-  const handlePointerEndForDrag = useCallback(() => {
-    clearLongPressTimer();
-  }, [clearLongPressTimer]);
-
-  const handleDragStart = useCallback(
-    (event: DragEvent<HTMLElement>, item: TimelineItem, date: string) => {
-      const visitKey = getVisitKey(item);
-
-      if (longPressReadyKey !== visitKey) {
-        event.preventDefault();
-        return;
-      }
-
-      setDraggingKey(visitKey);
-      setDraggingDate(date);
-      event.dataTransfer.effectAllowed = "move";
-      event.dataTransfer.setData("text/plain", visitKey);
-    },
-    [longPressReadyKey],
-  );
-
-  const handleDrop = useCallback(
+  const handleMoveVisit = useCallback(
     async (
-      event: DragEvent<HTMLElement>,
-      targetDate: string,
-      targetItem: TimelineItem,
-      groupItems: TimelineItem[],
+      visitDate: string,
+      items: TimelineItem[],
+      currentIndex: number,
+      direction: "up" | "down",
     ) => {
-      event.preventDefault();
+      const nextIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
 
-      const sourceKey = event.dataTransfer.getData("text/plain") || draggingKey;
-      const targetKey = getVisitKey(targetItem);
+      if (nextIndex < 0 || nextIndex >= items.length) return;
 
-      if (!sourceKey || !draggingDate || draggingDate !== targetDate) {
-        window.alert("只能調整同一天內的回憶順序");
-        return;
+      const movingItem = items[currentIndex];
+      const movingKey = getVisitKey(movingItem);
+      const nextItems = moveItem(items, currentIndex, nextIndex);
+
+      setMovingVisitKey(movingKey);
+
+      try {
+        await onReorderVisits(
+          visitDate,
+          nextItems.map((item) => ({
+            placeId: item.place.id,
+            visitId: item.visit.id,
+          })),
+        );
+      } finally {
+        setMovingVisitKey(null);
       }
-
-      if (sourceKey === targetKey) return;
-
-      const sourceIndex = groupItems.findIndex(
-        (item) => getVisitKey(item) === sourceKey,
-      );
-      const targetIndex = groupItems.findIndex(
-        (item) => getVisitKey(item) === targetKey,
-      );
-
-      if (sourceIndex < 0 || targetIndex < 0) return;
-
-      const nextItems = moveItem(groupItems, sourceIndex, targetIndex);
-
-      await onReorderVisits(
-        targetDate,
-        nextItems.map((item) => ({
-          placeId: item.place.id,
-          visitId: item.visit.id,
-        })),
-      );
     },
-    [draggingDate, draggingKey, onReorderVisits],
+    [onReorderVisits],
   );
-
-  const handleDragEnd = useCallback(() => {
-    setDraggingKey(null);
-    setDraggingDate(null);
-    setLongPressReadyKey(null);
-    clearLongPressTimer();
-  }, [clearLongPressTimer]);
 
   return (
     <section className="space-y-4 px-4 pb-28 pt-3">
@@ -422,7 +355,7 @@ export function TimelineView({
                   <div className="h-px flex-1 bg-gradient-to-l from-transparent via-orange-200 to-orange-300" />
                 </div>
 
-                {wrappedItems.map(({ item: { place, visit } }) => {
+                {wrappedItems.map(({ item: { place, visit } }, index) => {
                   const item: TimelineItem = { place, visit };
                   const visitKey = getVisitKey(item);
                   const photos = Array.isArray(visit.photos) ? visit.photos : [];
@@ -430,29 +363,37 @@ export function TimelineView({
                   const hiddenPhotoCount = Math.max(0, photos.length - PHOTO_LIMIT);
                   const coverIndex = place.coverPhotoIndex ?? 0;
                   const coverPhoto = place.photos?.[coverIndex] ?? place.photos?.[0];
-                  const canModify = canModifyVisit(visit, currentDeviceId);
-                  const authorName = visit.authorName?.trim();
-                  const notePrefix = `${formatDotDate(visit.visitDate)}${
-                    authorName ? ` ${authorName}` : ""
-                  }：`;
-                  const isDragReady = longPressReadyKey === visitKey;
-                  const isDragging = draggingKey === visitKey;
+                  const rawMemoryNotes = Array.isArray(visit.memoryNotes)
+                    ? visit.memoryNotes
+                    : [];
+                  const displayMemoryNotes =
+                    rawMemoryNotes.length > 0
+                      ? rawMemoryNotes
+                      : visit.note?.trim()
+                        ? [
+                            {
+                              id: "legacy-note",
+                              noteDate: visit.visitDate,
+                              text: visit.note,
+                              authorName: visit.authorName,
+                              authorDeviceId: visit.authorDeviceId,
+                              createdAt: visit.createdAt,
+                            },
+                          ]
+                        : [];
+                  const isFirst = index === 0;
+                  const isLast = index === wrappedItems.length - 1;
+                  const isMoving = movingVisitKey === visitKey;
+                  const canDeleteVisit =
+                    Boolean(visit.authorDeviceId) &&
+                    visit.authorDeviceId === currentDeviceId;
 
                   return (
                     <article
                       key={visitKey}
-                      draggable={isDragReady}
-                      onDragStart={(event) => handleDragStart(event, item, date)}
-                      onDragOver={(event) => event.preventDefault()}
-                      onDrop={(event) => handleDrop(event, date, item, items)}
-                      onDragEnd={handleDragEnd}
-                      onPointerDown={() => handlePointerDownForDrag(visitKey)}
-                      onPointerUp={handlePointerEndForDrag}
-                      onPointerCancel={handlePointerEndForDrag}
-                      onPointerLeave={handlePointerEndForDrag}
                       className={`overflow-hidden rounded-2xl border bg-white shadow-sm transition ${
-                        isDragging ? "scale-[0.98] opacity-60" : ""
-                      } ${isDragReady ? "ring-2 ring-orange-300" : ""}`}
+                        isMoving ? "scale-[0.99] opacity-60" : ""
+                      }`}
                     >
                       <div className="flex gap-3 p-3">
                         <div className="h-20 w-20 shrink-0 overflow-hidden rounded-2xl bg-slate-100">
@@ -481,8 +422,26 @@ export function TimelineView({
                               </p>
                             </div>
 
-                            <div className="shrink-0 rounded-full bg-orange-50 px-2 py-1 text-[10px] font-bold text-orange-600">
-                              長按拖曳
+                            <div className="flex shrink-0 gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleMoveVisit(date, items, index, "up")}
+                                disabled={isFirst || Boolean(movingVisitKey)}
+                                className="rounded-full bg-orange-50 px-2 py-1 text-xs font-black text-orange-600 disabled:bg-slate-100 disabled:text-slate-300"
+                                aria-label="上移回憶"
+                              >
+                                ↑
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => handleMoveVisit(date, items, index, "down")}
+                                disabled={isLast || Boolean(movingVisitKey)}
+                                className="rounded-full bg-orange-50 px-2 py-1 text-xs font-black text-orange-600 disabled:bg-slate-100 disabled:text-slate-300"
+                                aria-label="下移回憶"
+                              >
+                                ↓
+                              </button>
                             </div>
                           </div>
 
@@ -512,29 +471,39 @@ export function TimelineView({
                       <div className="border-t border-slate-100 px-3 py-3">
                         <div className="grid grid-cols-[1.35fr_1fr] gap-3">
                           <div className="min-w-0">
-                            <div className="max-h-28 overflow-y-auto whitespace-pre-wrap break-words pr-1 text-sm leading-5 text-slate-700">
-                              <span className="font-bold text-slate-900">
-                                {notePrefix}
-                              </span>
-                              {visit.note || "沒有文字紀錄"}
+                            <div className="max-h-32 overflow-y-auto whitespace-pre-wrap break-words pr-1 text-sm leading-5 text-slate-700">
+                              {displayMemoryNotes.length > 0 ? (
+                                <div className="space-y-1.5">
+                                  {displayMemoryNotes.map((memoryNote) => (
+                                    <div key={memoryNote.id}>
+                                      <span className="font-bold text-slate-900">
+                                        {formatDotDate(memoryNote.noteDate || visit.visitDate)} {memoryNote.authorName || "未命名"}：
+                                      </span>
+                                      {memoryNote.text || "沒有文字紀錄"}
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                "沒有文字紀錄"
+                              )}
                             </div>
                           </div>
 
                           <div className="grid h-24 grid-cols-2 gap-2 self-center">
-                            {visiblePhotos.map((photo, index) => (
+                            {visiblePhotos.map((photo, photoIndex) => (
                               <button
-                                key={`${photo}-${index}`}
+                                key={`${photo}-${photoIndex}`}
                                 type="button"
-                                onClick={() => handleOpenPhotoPreview(photos, index)}
+                                onClick={() => handleOpenPhotoPreview(photos, photoIndex)}
                                 className="relative h-24 overflow-hidden rounded-xl"
                               >
                                 <img
                                   src={photo}
-                                  alt={`timeline-photo-${index + 1}`}
+                                  alt={`timeline-photo-${photoIndex + 1}`}
                                   className="h-full w-full object-cover"
                                 />
 
-                                {index === 1 && hiddenPhotoCount > 0 ? (
+                                {photoIndex === 1 && hiddenPhotoCount > 0 ? (
                                   <div className="absolute inset-0 flex items-center justify-center bg-black/50 text-lg font-bold text-white">
                                     +{hiddenPhotoCount}
                                   </div>
@@ -561,30 +530,24 @@ export function TimelineView({
                           </div>
                         </div>
 
-                        <div className="mt-3 grid grid-cols-2 gap-2">
-                          {canModify ? (
-                            <>
-                              <button
-                                type="button"
-                                onClick={() => onEditVisit(place.id, visit.id)}
-                                className="rounded-xl bg-slate-200 px-2 py-2 text-xs font-bold text-slate-700"
-                              >
-                                📝 編輯
-                              </button>
+                        <div className={`mt-3 grid gap-2 ${canDeleteVisit ? "grid-cols-2" : "grid-cols-1"}`}>
+                          <button
+                            type="button"
+                            onClick={() => onEditVisit(place.id, visit.id)}
+                            className="rounded-xl bg-slate-200 px-2 py-2 text-xs font-bold text-slate-700"
+                          >
+                            📝 編輯
+                          </button>
 
-                              <button
-                                type="button"
-                                onClick={() => onDeleteVisit(place.id, visit.id)}
-                                className="rounded-xl bg-rose-100 px-2 py-2 text-xs font-bold text-rose-600"
-                              >
-                                🗑️ 刪除
-                              </button>
-                            </>
-                          ) : (
-                            <div className="col-span-2 rounded-xl bg-slate-100 px-3 py-2 text-center text-xs font-bold text-slate-500">
-                              只能由填寫者修改
-                            </div>
-                          )}
+                          {canDeleteVisit ? (
+                            <button
+                              type="button"
+                              onClick={() => onDeleteVisit(place.id, visit.id)}
+                              className="rounded-xl bg-rose-100 px-2 py-2 text-xs font-bold text-rose-600"
+                            >
+                              🗑️ 刪除
+                            </button>
+                          ) : null}
                         </div>
                       </div>
                     </article>

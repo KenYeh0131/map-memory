@@ -1,21 +1,31 @@
+
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
 import { getDownloadURL, ref, uploadBytesResumable } from "firebase/storage";
 import { storage } from "@/lib/firebase";
-import { RATING_LABELS, RATING_OPTIONS } from "@/lib/places";
+import {
+  RATING_LABELS,
+  RATING_OPTIONS,
+  type MemoryNoteItem,
+} from "@/lib/places";
 
 export type VisitFormValues = {
   visitDate: string;
   note: string;
   photos: string[];
   rating?: number;
+  memoryNotes: MemoryNoteItem[];
+  authorName?: string;
+  authorDeviceId?: string;
 };
 
 type VisitFormModalProps = {
   isOpen: boolean;
   mode?: "create" | "edit";
   placeName: string;
+  currentAuthorName: string;
+  currentDeviceId: string;
   initialValues?: VisitFormValues | null;
   onClose: () => void;
   onSubmit: (values: VisitFormValues) => void | Promise<void>;
@@ -38,6 +48,64 @@ const idleUploadStatus: UploadStatus = {
 
 function todayText() {
   return new Date().toISOString().slice(0, 10);
+}
+
+function createMemoryNoteId() {
+  return `memory-note-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function formatDotDate(dateText?: string) {
+  if (!dateText) return "";
+  return dateText.replaceAll("-", ".");
+}
+
+function normalizeMemoryNotes(
+  initialValues: VisitFormValues | null | undefined,
+): MemoryNoteItem[] {
+  const memoryNotes = Array.isArray(initialValues?.memoryNotes)
+    ? initialValues.memoryNotes
+    : [];
+
+  if (memoryNotes.length > 0) {
+    return memoryNotes
+      .filter((item) => item && typeof item.text === "string")
+      .map((item) => ({
+        id: item.id || createMemoryNoteId(),
+        noteDate: item.noteDate || initialValues?.visitDate || todayText(),
+        text: item.text || "",
+        authorName: item.authorName || initialValues?.authorName || "",
+        authorDeviceId: item.authorDeviceId || initialValues?.authorDeviceId || "",
+        createdAt: item.createdAt || new Date().toISOString(),
+        updatedAt: item.updatedAt,
+      }));
+  }
+
+  const legacyNote = initialValues?.note?.trim() ?? "";
+
+  if (!legacyNote) return [];
+
+  return [
+    {
+      id: "legacy-note",
+      noteDate: initialValues?.visitDate || todayText(),
+      text: legacyNote,
+      authorName: initialValues?.authorName || "",
+      authorDeviceId: initialValues?.authorDeviceId || "",
+      createdAt: initialValues?.visitDate || new Date().toISOString(),
+    },
+  ];
+}
+
+function buildLegacyNote(memoryNotes: MemoryNoteItem[]) {
+  return memoryNotes
+    .map((item) => item.text.trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+function canEditMemoryNote(note: MemoryNoteItem, currentDeviceId: string) {
+  if (!note.authorDeviceId) return true;
+  return note.authorDeviceId === currentDeviceId;
 }
 
 function loadImageFromObjectUrl(url: string): Promise<HTMLImageElement> {
@@ -144,12 +212,17 @@ export function VisitFormModal({
   isOpen,
   mode = "create",
   placeName,
+  currentAuthorName,
+  currentDeviceId,
   initialValues,
   onClose,
   onSubmit,
 }: VisitFormModalProps) {
   const [visitDate, setVisitDate] = useState(todayText());
-  const [note, setNote] = useState("");
+  const [memoryNotes, setMemoryNotes] = useState<MemoryNoteItem[]>([]);
+  const [newNoteText, setNewNoteText] = useState("");
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+  const [editingNoteText, setEditingNoteText] = useState("");
   const [photos, setPhotos] = useState<string[]>([]);
   const [rating, setRating] = useState<number>(0);
   const [isUploading, setIsUploading] = useState(false);
@@ -162,32 +235,99 @@ export function VisitFormModal({
 
     if (mode === "edit" && initialValues) {
       setVisitDate(initialValues.visitDate || todayText());
-      setNote(initialValues.note || "");
+      setMemoryNotes(normalizeMemoryNotes(initialValues));
       setPhotos(
         Array.isArray(initialValues.photos) ? initialValues.photos : [],
       );
       setRating(initialValues.rating ?? 0);
     } else {
       setVisitDate(todayText());
-      setNote("");
+      setMemoryNotes([]);
       setPhotos([]);
       setRating(0);
     }
 
+    setNewNoteText("");
+    setEditingNoteId(null);
+    setEditingNoteText("");
     setIsUploading(false);
     setIsSaving(false);
     setUploadStatus(idleUploadStatus);
   }, [isOpen, mode, initialValues]);
 
-  const previewPhotos = useMemo(() => {
-    return photos.slice(0, PREVIEW_LIMIT);
-  }, [photos]);
-
-  const remainPhotoCount = useMemo(() => {
-    return Math.max(0, photos.length - PREVIEW_LIMIT);
-  }, [photos.length]);
+  const previewPhotos = useMemo(() => photos.slice(0, PREVIEW_LIMIT), [photos]);
+  const remainPhotoCount = useMemo(
+    () => Math.max(0, photos.length - PREVIEW_LIMIT),
+    [photos.length],
+  );
 
   if (!isOpen) return null;
+
+  const addCurrentNoteDraft = () => {
+    const trimmedText = newNoteText.trim();
+
+    if (!trimmedText) return;
+
+    const now = new Date().toISOString();
+
+    setMemoryNotes((prev) => [
+      ...prev,
+      {
+        id: createMemoryNoteId(),
+        noteDate: visitDate,
+        text: trimmedText,
+        authorName: currentAuthorName.trim() || "未命名",
+        authorDeviceId: currentDeviceId,
+        createdAt: now,
+      },
+    ]);
+    setNewNoteText("");
+  };
+
+  const startEditMemoryNote = (note: MemoryNoteItem) => {
+    if (!canEditMemoryNote(note, currentDeviceId)) return;
+
+    setEditingNoteId(note.id);
+    setEditingNoteText(note.text);
+  };
+
+  const saveEditMemoryNote = () => {
+    if (!editingNoteId) return;
+
+    const trimmedText = editingNoteText.trim();
+
+    if (!trimmedText) {
+      window.alert("留言內容不能空白");
+      return;
+    }
+
+    setMemoryNotes((prev) =>
+      prev.map((note) =>
+        note.id === editingNoteId && canEditMemoryNote(note, currentDeviceId)
+          ? {
+              ...note,
+              text: trimmedText,
+              noteDate: visitDate,
+              updatedAt: new Date().toISOString(),
+            }
+          : note,
+      ),
+    );
+    setEditingNoteId(null);
+    setEditingNoteText("");
+  };
+
+  const deleteMemoryNote = (noteId: string) => {
+    const targetNote = memoryNotes.find((note) => note.id === noteId);
+
+    if (!targetNote || !canEditMemoryNote(targetNote, currentDeviceId)) return;
+
+    const ok = window.confirm("確定要刪除你寫的這段回憶嗎？");
+
+    if (!ok) return;
+
+    setMemoryNotes((prev) => prev.filter((note) => note.id !== noteId));
+  };
 
   const handlePhotoUpload = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
@@ -287,11 +427,10 @@ export function VisitFormModal({
     setPhotos((prev) => prev.filter((photo) => photo !== photoUrl));
   };
 
-
-
   const getComparableValues = () => ({
     visitDate,
-    note: note.trim(),
+    memoryNotes,
+    newNoteText: newNoteText.trim(),
     photos,
     rating,
   });
@@ -300,7 +439,8 @@ export function VisitFormModal({
     if (mode === "edit" && initialValues) {
       return {
         visitDate: initialValues.visitDate || todayText(),
-        note: (initialValues.note || "").trim(),
+        memoryNotes: normalizeMemoryNotes(initialValues),
+        newNoteText: "",
         photos: Array.isArray(initialValues.photos) ? initialValues.photos : [],
         rating: initialValues.rating ?? 0,
       };
@@ -308,18 +448,16 @@ export function VisitFormModal({
 
     return {
       visitDate: todayText(),
-      note: "",
+      memoryNotes: [],
+      newNoteText: "",
       photos: [],
       rating: 0,
     };
   };
 
-  const isDirty = () => {
-    return (
-      JSON.stringify(getComparableValues()) !==
-      JSON.stringify(getInitialComparableValues())
-    );
-  };
+  const isDirty = () =>
+    JSON.stringify(getComparableValues()) !==
+    JSON.stringify(getInitialComparableValues());
 
   const handleRequestClose = () => {
     if (isUploading) {
@@ -355,14 +493,33 @@ export function VisitFormModal({
 
     if (isSaving) return;
 
+    const now = new Date().toISOString();
+    const trimmedNewNoteText = newNoteText.trim();
+    const nextMemoryNotes = trimmedNewNoteText
+      ? [
+          ...memoryNotes,
+          {
+            id: createMemoryNoteId(),
+            noteDate: visitDate,
+            text: trimmedNewNoteText,
+            authorName: currentAuthorName.trim() || "未命名",
+            authorDeviceId: currentDeviceId,
+            createdAt: now,
+          },
+        ]
+      : memoryNotes;
+
     setIsSaving(true);
 
     try {
       await onSubmit({
         visitDate,
-        note: note.trim(),
+        note: buildLegacyNote(nextMemoryNotes),
         photos,
         rating,
+        memoryNotes: nextMemoryNotes,
+        authorName: currentAuthorName.trim() || "未命名",
+        authorDeviceId: currentDeviceId,
       });
     } catch (error) {
       console.error(error);
@@ -423,19 +580,117 @@ export function VisitFormModal({
               </p>
             </label>
 
-            <label className="block text-sm">
-              <span className="mb-1 block font-semibold text-slate-800">
-                這次的回憶
-              </span>
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+              <div className="mb-2 text-sm font-bold text-slate-800">
+                這次的回憶留言
+              </div>
 
-              <textarea
-                value={note}
-                onChange={(event) => setNote(event.target.value)}
-                rows={4}
-                placeholder="記錄這次去的感受、發生的事、想留下的回憶..."
-                className="w-full rounded-xl border border-slate-300 px-3 py-2"
-              />
-            </label>
+              {memoryNotes.length > 0 ? (
+                <div className="space-y-2">
+                  {memoryNotes.map((memoryNote) => {
+                    const canEdit = canEditMemoryNote(memoryNote, currentDeviceId);
+                    const isEditing = editingNoteId === memoryNote.id;
+
+                    return (
+                      <div
+                        key={memoryNote.id}
+                        className="rounded-xl bg-white p-3 text-sm shadow-sm"
+                      >
+                        <div className="mb-1 text-xs font-bold text-slate-500">
+                          {formatDotDate(memoryNote.noteDate || visitDate)} {memoryNote.authorName || "未命名"}
+                        </div>
+
+                        {isEditing ? (
+                          <div className="space-y-2">
+                            <textarea
+                              value={editingNoteText}
+                              onChange={(event) => setEditingNoteText(event.target.value)}
+                              rows={3}
+                              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+                            />
+
+                            <div className="grid grid-cols-2 gap-2">
+                              <button
+                                type="button"
+                                onClick={saveEditMemoryNote}
+                                className="rounded-xl bg-orange-500 px-3 py-2 text-xs font-bold text-white"
+                              >
+                                儲存文字
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingNoteId(null);
+                                  setEditingNoteText("");
+                                }}
+                                className="rounded-xl bg-slate-200 px-3 py-2 text-xs font-bold text-slate-700"
+                              >
+                                取消
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            <div className="whitespace-pre-wrap break-words leading-5 text-slate-700">
+                              {memoryNote.text || "沒有文字紀錄"}
+                            </div>
+
+                            {canEdit ? (
+                              <div className="mt-2 flex gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => startEditMemoryNote(memoryNote)}
+                                  className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-600"
+                                >
+                                  編輯我的文字
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => deleteMemoryNote(memoryNote.id)}
+                                  className="rounded-full bg-rose-50 px-2.5 py-1 text-xs font-bold text-rose-600"
+                                >
+                                  刪除我的文字
+                                </button>
+                              </div>
+                            ) : null}
+                          </>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="rounded-xl bg-white px-3 py-2 text-xs text-slate-500">
+                  目前還沒有留言。
+                </div>
+              )}
+
+              <label className="mt-3 block text-sm">
+                <span className="mb-1 block font-semibold text-slate-800">
+                  新增我的回憶文字
+                </span>
+
+                <textarea
+                  value={newNoteText}
+                  onChange={(event) => setNewNoteText(event.target.value)}
+                  rows={3}
+                  placeholder="補充這次去的感受、發生的事、想留下的回憶..."
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2"
+                />
+              </label>
+
+              {newNoteText.trim() ? (
+                <button
+                  type="button"
+                  onClick={addCurrentNoteDraft}
+                  className="mt-2 w-full rounded-xl bg-slate-900 px-3 py-2 text-xs font-bold text-white"
+                >
+                  先加入留言清單
+                </button>
+              ) : null}
+            </div>
 
             <label className="block text-sm">
               <span className="mb-1 block font-semibold text-slate-800">

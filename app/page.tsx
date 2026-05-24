@@ -178,7 +178,7 @@ function loadJoinedGroupIds() {
     }
 
     return parsed.filter(
-      (groupId) => typeof groupId === "string" && groupId.trim().length > 0
+      (groupId) => typeof groupId === "string" && groupId.trim().length > 0,
     );
   } catch {
     return [];
@@ -241,7 +241,7 @@ function mergeGroups(firebaseGroups: MapGroup[]) {
 
   firebaseGroups.forEach((group) => {
     const existingIndex = mergedGroups.findIndex(
-      (existingGroup) => existingGroup.id === group.id
+      (existingGroup) => existingGroup.id === group.id,
     );
 
     if (existingIndex >= 0) {
@@ -264,7 +264,10 @@ function getVisibleGroups(allGroups: MapGroup[], joinedGroupIds: string[]) {
 }
 
 function getVisitDates(visits: VisitItem[]) {
-  return visits.map((visit) => visit.visitDate).filter(Boolean).sort();
+  return visits
+    .map((visit) => visit.visitDate)
+    .filter(Boolean)
+    .sort();
 }
 
 function buildVisitSummaryUpdate(visits: VisitItem[]) {
@@ -291,7 +294,7 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<TabId>("map");
   const [allGroups, setAllGroups] = useState<MapGroup[]>(FALLBACK_GROUPS);
   const [joinedGroupIds, setJoinedGroupIds] = useState<string[]>(() =>
-    loadJoinedGroupIds()
+    loadJoinedGroupIds(),
   );
   const [currentGroupId, setCurrentGroupId] = useState(DEFAULT_GROUP_ID);
   const [deviceId] = useState(() => getOrCreateDeviceId());
@@ -303,10 +306,12 @@ export default function Home() {
   const [isJoinRequestPopupOpen, setIsJoinRequestPopupOpen] = useState(false);
   const [isCreatingGroup, setIsCreatingGroup] = useState(false);
   const [isRequestingJoin, setIsRequestingJoin] = useState(false);
-  const [isApprovingRequestId, setIsApprovingRequestId] =
-    useState<string | null>(null);
-  const [isRejectingRequestId, setIsRejectingRequestId] =
-    useState<string | null>(null);
+  const [isApprovingRequestId, setIsApprovingRequestId] = useState<
+    string | null
+  >(null);
+  const [isRejectingRequestId, setIsRejectingRequestId] = useState<
+    string | null
+  >(null);
   const [isLeavingGroup, setIsLeavingGroup] = useState(false);
   const [isDeletingGroup, setIsDeletingGroup] = useState(false);
   const [places, setPlaces] = useState<PlaceItem[]>([]);
@@ -318,10 +323,10 @@ export default function Home() {
   const [isLoadingPlaces, setIsLoadingPlaces] = useState(true);
   const [isVisitModalOpen, setIsVisitModalOpen] = useState(false);
   const [visitFormMode, setVisitFormMode] = useState<"create" | "edit">(
-    "create"
+    "create",
   );
   const [visitTargetPlace, setVisitTargetPlace] = useState<PlaceItem | null>(
-    null
+    null,
   );
   const [editingVisitId, setEditingVisitId] = useState<string | null>(null);
   const [editingVisitValues, setEditingVisitValues] =
@@ -329,7 +334,7 @@ export default function Home() {
 
   const mapGroups = useMemo(
     () => getVisibleGroups(allGroups, joinedGroupIds),
-    [allGroups, joinedGroupIds]
+    [allGroups, joinedGroupIds],
   );
 
   const safeCurrentGroupId =
@@ -349,12 +354,12 @@ export default function Home() {
 
   const placesCollectionRef = useMemo(
     () => collection(db, "groups", safeCurrentGroupId, "places"),
-    [safeCurrentGroupId]
+    [safeCurrentGroupId],
   );
 
   const joinRequestsCollectionRef = useMemo(
     () => collection(db, "groups", safeCurrentGroupId, "joinRequests"),
-    [safeCurrentGroupId]
+    [safeCurrentGroupId],
   );
 
   useEffect(() => {
@@ -395,7 +400,7 @@ export default function Home() {
           window.localStorage.setItem(CURRENT_GROUP_STORAGE_KEY, newGroup.id);
           window.localStorage.setItem(
             JOINED_GROUPS_STORAGE_KEY,
-            JSON.stringify([newGroup.id])
+            JSON.stringify([newGroup.id]),
           );
         }
       } catch (error) {
@@ -426,7 +431,7 @@ export default function Home() {
   useEffect(() => {
     window.localStorage.setItem(
       JOINED_GROUPS_STORAGE_KEY,
-      JSON.stringify(joinedGroupIds)
+      JSON.stringify(joinedGroupIds),
     );
   }, [joinedGroupIds]);
 
@@ -445,7 +450,7 @@ export default function Home() {
             "groups",
             documentSnapshot.id,
             "info",
-            "meta"
+            "meta",
           );
 
           const metaSnapshot = await getDoc(metaRef);
@@ -456,9 +461,7 @@ export default function Home() {
             firebaseGroups.push({
               id: documentSnapshot.id,
               name:
-                typeof data.name === "string"
-                  ? data.name
-                  : documentSnapshot.id,
+                typeof data.name === "string" ? data.name : documentSnapshot.id,
               inviteCode:
                 typeof data.inviteCode === "string"
                   ? data.inviteCode
@@ -489,13 +492,7 @@ export default function Home() {
     if (allGroups.length === 0) return;
 
     const unsubscribes = allGroups.map((group) => {
-      const requestRef = doc(
-        db,
-        "groups",
-        group.id,
-        "joinRequests",
-        deviceId
-      );
+      const requestRef = doc(db, "groups", group.id, "joinRequests", deviceId);
 
       return onSnapshot(requestRef, (snapshot) => {
         if (!snapshot.exists()) return;
@@ -520,7 +517,7 @@ export default function Home() {
   useEffect(() => {
     const requestsQuery = query(
       joinRequestsCollectionRef,
-      orderBy("createdAt", "desc")
+      orderBy("createdAt", "desc"),
     );
 
     const unsubscribe = onSnapshot(requestsQuery, (snapshot) => {
@@ -557,7 +554,10 @@ export default function Home() {
   }, [joinRequestsCollectionRef]);
 
   useEffect(() => {
-    const placesQuery = query(placesCollectionRef, orderBy("updatedAt", "desc"));
+    const placesQuery = query(
+      placesCollectionRef,
+      orderBy("updatedAt", "desc"),
+    );
 
     const unsubscribe = onSnapshot(
       placesQuery,
@@ -565,8 +565,8 @@ export default function Home() {
         const nextPlaces = snapshot.docs.map((documentSnapshot) =>
           normalizePlace(
             documentSnapshot.id,
-            documentSnapshot.data() as Partial<PlaceItem>
-          )
+            documentSnapshot.data() as Partial<PlaceItem>,
+          ),
         );
 
         setPlaces(nextPlaces);
@@ -576,7 +576,7 @@ export default function Home() {
         console.error(error);
         window.alert("讀取雲端地點失敗，請確認 Firebase 規則是否為測試模式");
         setIsLoadingPlaces(false);
-      }
+      },
     );
 
     return () => unsubscribe();
@@ -611,7 +611,8 @@ export default function Home() {
         filters.status === "all" || place.status === filters.status;
 
       const matchesRating =
-        filters.minRating === "all" || Math.round(Number(place.rating ?? 0)) === filters.minRating;
+        filters.minRating === "all" ||
+        Math.round(Number(place.rating ?? 0)) === filters.minRating;
 
       const matchesTags =
         selectedTags.length === 0 ||
@@ -663,11 +664,6 @@ export default function Home() {
       return;
     }
 
-    if (targetVisit.authorDeviceId && targetVisit.authorDeviceId !== deviceId) {
-      window.alert("只有填寫這筆回憶的人可以編輯");
-      return;
-    }
-
     setVisitFormMode("edit");
     setVisitTargetPlace(targetPlace);
     setEditingVisitId(visitId);
@@ -676,6 +672,11 @@ export default function Home() {
       note: targetVisit.note ?? "",
       photos: Array.isArray(targetVisit.photos) ? targetVisit.photos : [],
       rating: targetVisit.rating ?? 0,
+      memoryNotes: Array.isArray(targetVisit.memoryNotes)
+        ? targetVisit.memoryNotes
+        : [],
+      authorName: targetVisit.authorName,
+      authorDeviceId: targetVisit.authorDeviceId,
     });
     setIsVisitModalOpen(true);
   };
@@ -770,7 +771,7 @@ export default function Home() {
 
       for (const groupDocument of groupsSnapshot.docs) {
         const metaSnapshot = await getDoc(
-          doc(db, "groups", groupDocument.id, "info", "meta")
+          doc(db, "groups", groupDocument.id, "info", "meta"),
         );
 
         if (!metaSnapshot.exists()) continue;
@@ -784,8 +785,7 @@ export default function Home() {
         if (inviteCode === normalizedInviteCode) {
           matchedGroup = {
             id: groupDocument.id,
-            name:
-              typeof data.name === "string" ? data.name : groupDocument.id,
+            name: typeof data.name === "string" ? data.name : groupDocument.id,
             inviteCode:
               typeof data.inviteCode === "string" ? data.inviteCode : "",
             ownerDeviceId:
@@ -816,7 +816,7 @@ export default function Home() {
           status: "pending",
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
-        }
+        },
       );
 
       setJoinInviteCode("");
@@ -839,7 +839,7 @@ export default function Home() {
           status: "approved",
           reviewedAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
-        }
+        },
       );
     } catch (error) {
       console.error(error);
@@ -859,7 +859,7 @@ export default function Home() {
           status: "rejected",
           reviewedAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
-        }
+        },
       );
     } catch (error) {
       console.error(error);
@@ -878,7 +878,7 @@ export default function Home() {
     }
 
     const confirmLeave = window.confirm(
-      `確定要退出「${currentGroupName}」嗎？\n\n退出後不會刪除地點資料，只是不再顯示這個地圖群。`
+      `確定要退出「${currentGroupName}」嗎？\n\n退出後不會刪除地點資料，只是不再顯示這個地圖群。`,
     );
 
     if (!confirmLeave) return;
@@ -886,13 +886,13 @@ export default function Home() {
     setIsLeavingGroup(true);
 
     const nextJoinedGroupIds = joinedGroupIds.filter(
-      (groupId) => groupId !== currentGroup.id
+      (groupId) => groupId !== currentGroup.id,
     );
 
     setJoinedGroupIds(nextJoinedGroupIds);
 
     const nextGroup = allGroups.find((group) =>
-      nextJoinedGroupIds.includes(group.id)
+      nextJoinedGroupIds.includes(group.id),
     );
 
     if (nextGroup) {
@@ -911,13 +911,13 @@ export default function Home() {
     }
 
     const confirmDelete = window.confirm(
-      `確定要刪除「${currentGroupName}」嗎？\n\n這會刪除這個地圖群的主資料與所有地點資料，無法復原。`
+      `確定要刪除「${currentGroupName}」嗎？\n\n這會刪除這個地圖群的主資料與所有地點資料，無法復原。`,
     );
 
     if (!confirmDelete) return;
 
     const secondConfirmDelete = window.confirm(
-      `再次確認：真的要永久刪除「${currentGroupName}」嗎？`
+      `再次確認：真的要永久刪除「${currentGroupName}」嗎？`,
     );
 
     if (!secondConfirmDelete) return;
@@ -926,19 +926,19 @@ export default function Home() {
 
     try {
       const placesSnapshot = await getDocs(
-        collection(db, "groups", currentGroup.id, "places")
+        collection(db, "groups", currentGroup.id, "places"),
       );
 
       await Promise.all(
         placesSnapshot.docs.map((placeDocument) =>
           deleteDoc(
-            doc(db, "groups", currentGroup.id, "places", placeDocument.id)
-          )
-        )
+            doc(db, "groups", currentGroup.id, "places", placeDocument.id),
+          ),
+        ),
       );
 
       const requestsSnapshot = await getDocs(
-        collection(db, "groups", currentGroup.id, "joinRequests")
+        collection(db, "groups", currentGroup.id, "joinRequests"),
       );
 
       await Promise.all(
@@ -949,27 +949,27 @@ export default function Home() {
               "groups",
               currentGroup.id,
               "joinRequests",
-              requestDocument.id
-            )
-          )
-        )
+              requestDocument.id,
+            ),
+          ),
+        ),
       );
 
       await deleteDoc(doc(db, "groups", currentGroup.id, "info", "meta"));
       await deleteDoc(doc(db, "groups", currentGroup.id));
 
       const nextJoinedGroupIds = joinedGroupIds.filter(
-        (groupId) => groupId !== currentGroup.id
+        (groupId) => groupId !== currentGroup.id,
       );
 
       setJoinedGroupIds(nextJoinedGroupIds);
       setAllGroups((prev) =>
-        prev.filter((group) => group.id !== currentGroup.id)
+        prev.filter((group) => group.id !== currentGroup.id),
       );
 
       const nextGroup = allGroups.find(
         (group) =>
-          group.id !== currentGroup.id && nextJoinedGroupIds.includes(group.id)
+          group.id !== currentGroup.id && nextJoinedGroupIds.includes(group.id),
       );
 
       if (nextGroup) {
@@ -1013,7 +1013,7 @@ export default function Home() {
 
         await setDoc(
           doc(db, "groups", safeCurrentGroupId, "places", placeId),
-          newPlace
+          newPlace,
         );
 
         setSelectedPlaceId(placeId);
@@ -1036,7 +1036,7 @@ export default function Home() {
 
         await updateDoc(
           doc(db, "groups", safeCurrentGroupId, "places", editingPlace.id),
-          updatedPlace
+          updatedPlace,
         );
 
         setSelectedPlaceId(editingPlace.id);
@@ -1045,7 +1045,9 @@ export default function Home() {
       closeForm();
     } catch (error) {
       console.error(error);
-      window.alert("儲存地點失敗，請確認 Firebase Firestore 規則是否為測試模式");
+      window.alert(
+        "儲存地點失敗，請確認 Firebase Firestore 規則是否為測試模式",
+      );
     }
   };
 
@@ -1059,29 +1061,23 @@ export default function Home() {
         const currentVisits = Array.isArray(visitTargetPlace.visits)
           ? visitTargetPlace.visits
           : [];
-        const editingVisit = currentVisits.find((visit) => visit.id === editingVisitId);
-
-        if (editingVisit?.authorDeviceId && editingVisit.authorDeviceId !== deviceId) {
-          window.alert("只有填寫這筆回憶的人可以編輯");
-          return;
-        }
-
         const nextVisits = currentVisits.map((visit) =>
           visit.id === editingVisitId
             ? {
                 ...visit,
                 visitDate: values.visitDate,
                 note: values.note,
+                memoryNotes: values.memoryNotes,
                 photos: values.photos,
                 rating: values.rating ?? 0,
                 updatedAt: now,
               }
-            : visit
+            : visit,
         );
 
         await updateDoc(
           doc(db, "groups", safeCurrentGroupId, "places", visitTargetPlace.id),
-          buildVisitSummaryUpdate(nextVisits)
+          buildVisitSummaryUpdate(nextVisits),
         );
 
         setSelectedPlaceId(visitTargetPlace.id);
@@ -1094,10 +1090,11 @@ export default function Home() {
         : [];
 
       const sameDateVisits = currentVisits.filter(
-        (visit) => visit.visitDate === values.visitDate
+        (visit) => visit.visitDate === values.visitDate,
       );
       const maxSortOrder = sameDateVisits.reduce((max, visit, index) => {
-        const sortOrder = typeof visit.sortOrder === "number" ? visit.sortOrder : index;
+        const sortOrder =
+          typeof visit.sortOrder === "number" ? visit.sortOrder : index;
         return Math.max(max, sortOrder);
       }, -1);
 
@@ -1105,6 +1102,7 @@ export default function Home() {
         id: `visit-${Date.now()}`,
         visitDate: values.visitDate,
         note: values.note,
+        memoryNotes: values.memoryNotes,
         photos: values.photos,
         rating: values.rating ?? 0,
         authorName: nickname.trim() || "未命名",
@@ -1122,7 +1120,7 @@ export default function Home() {
 
       await updateDoc(
         doc(db, "groups", safeCurrentGroupId, "places", visitTargetPlace.id),
-        updatedPlace
+        updatedPlace,
       );
 
       setSelectedPlaceId(visitTargetPlace.id);
@@ -1132,7 +1130,7 @@ export default function Home() {
       window.alert(
         visitFormMode === "edit"
           ? "更新回憶失敗，請稍後再試"
-          : "新增回憶失敗，請稍後再試"
+          : "新增回憶失敗，請稍後再試",
       );
     }
   };
@@ -1145,26 +1143,34 @@ export default function Home() {
       return;
     }
 
-    const confirmDelete = window.confirm("確定要刪除這筆回憶嗎？");
-
-    if (!confirmDelete) return;
-
     try {
       const currentVisits = Array.isArray(targetPlace.visits)
         ? targetPlace.visits
         : [];
       const targetVisit = currentVisits.find((visit) => visit.id === visitId);
 
-      if (targetVisit?.authorDeviceId && targetVisit.authorDeviceId !== deviceId) {
-        window.alert("只有填寫這筆回憶的人可以刪除");
+      if (!targetVisit) {
+        window.alert("找不到這筆回憶");
         return;
       }
+
+      if (
+        !targetVisit.authorDeviceId ||
+        targetVisit.authorDeviceId !== deviceId
+      ) {
+        window.alert("只有建立這筆回憶的人可以刪除整筆回憶");
+        return;
+      }
+
+      const confirmDelete = window.confirm("確定要刪除這筆回憶嗎？");
+
+      if (!confirmDelete) return;
 
       const nextVisits = currentVisits.filter((visit) => visit.id !== visitId);
 
       await updateDoc(
         doc(db, "groups", safeCurrentGroupId, "places", placeId),
-        buildVisitSummaryUpdate(nextVisits)
+        buildVisitSummaryUpdate(nextVisits),
       );
 
       setSelectedPlaceId((prev) => (prev === placeId ? placeId : prev));
@@ -1176,16 +1182,19 @@ export default function Home() {
 
   const handleReorderTimelineVisits = async (
     visitDate: string,
-    orderedItems: { placeId: string; visitId: string }[]
+    orderedItems: { placeId: string; visitId: string }[],
   ) => {
     if (!visitDate || orderedItems.length === 0) return;
 
     try {
       const orderMap = new Map(
-        orderedItems.map((item, index) => [`${item.placeId}__${item.visitId}`, index])
+        orderedItems.map((item, index) => [
+          `${item.placeId}__${item.visitId}`,
+          index,
+        ]),
       );
       const affectedPlaceIds = Array.from(
-        new Set(orderedItems.map((item) => item.placeId))
+        new Set(orderedItems.map((item) => item.placeId)),
       );
 
       await Promise.all(
@@ -1207,7 +1216,9 @@ export default function Home() {
               return {
                 ...visit,
                 sortOrder:
-                  typeof visit.sortOrder === "number" ? visit.sortOrder : fallbackIndex,
+                  typeof visit.sortOrder === "number"
+                    ? visit.sortOrder
+                    : fallbackIndex,
               };
             }
 
@@ -1220,9 +1231,9 @@ export default function Home() {
 
           await updateDoc(
             doc(db, "groups", safeCurrentGroupId, "places", placeId),
-            buildVisitSummaryUpdate(nextVisits)
+            buildVisitSummaryUpdate(nextVisits),
           );
-        })
+        }),
       );
     } catch (error) {
       console.error(error);
@@ -1240,10 +1251,9 @@ export default function Home() {
     }
   };
 
-
   const handleCopyPlaceToGroup = async (
     place: PlaceItem,
-    targetGroupId: string
+    targetGroupId: string,
   ) => {
     if (!targetGroupId) {
       window.alert("請選擇要複製到哪一個地圖群");
@@ -1280,7 +1290,7 @@ export default function Home() {
       const confirmCopy = window.confirm(
         `「${targetGroup.name}」可能已經有相同地點。
 
-仍要複製一份新的地點嗎？`
+仍要複製一份新的地點嗎？`,
       );
 
       if (!confirmCopy) {
@@ -1318,7 +1328,7 @@ export default function Home() {
 
     await setDoc(
       doc(db, "groups", targetGroupId, "places", copiedPlaceId),
-      copiedPlace
+      copiedPlace,
     );
 
     return true;
@@ -1326,9 +1336,7 @@ export default function Home() {
 
   const handleToggleDeleteTag = (tag: string) => {
     setSelectedDeleteTags((prev) =>
-      prev.includes(tag)
-        ? prev.filter((item) => item !== tag)
-        : [...prev, tag]
+      prev.includes(tag) ? prev.filter((item) => item !== tag) : [...prev, tag],
     );
   };
 
@@ -1339,14 +1347,14 @@ export default function Home() {
     }
 
     const confirmDelete = window.confirm(
-      `確定要刪除 ${selectedDeleteTags.length} 個標籤嗎？`
+      `確定要刪除 ${selectedDeleteTags.length} 個標籤嗎？`,
     );
 
     if (!confirmDelete) return;
 
     try {
       const targetPlaces = places.filter((place) =>
-        place.tags.some((tag) => selectedDeleteTags.includes(tag))
+        place.tags.some((tag) => selectedDeleteTags.includes(tag)),
       );
 
       await Promise.all(
@@ -1354,8 +1362,8 @@ export default function Home() {
           updateDoc(doc(db, "groups", safeCurrentGroupId, "places", place.id), {
             tags: place.tags.filter((tag) => !selectedDeleteTags.includes(tag)),
             updatedAt: new Date().toISOString(),
-          })
-        )
+          }),
+        ),
       );
 
       setSelectedDeleteTags([]);
@@ -1403,7 +1411,6 @@ export default function Home() {
               aria-label="加入申請通知"
             >
               🔔
-
               {joinRequests.length > 0 ? (
                 <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white">
                   {joinRequests.length}
@@ -1455,6 +1462,7 @@ export default function Home() {
             onAddVisit={openVisitModal}
             onEditVisit={openEditVisitModal}
             onDeleteVisit={handleDeleteVisit}
+            currentDeviceId={deviceId}
             copyTargetGroups={mapGroups}
             currentGroupId={safeCurrentGroupId}
             onCopyPlaceToGroup={handleCopyPlaceToGroup}
@@ -1478,7 +1486,6 @@ export default function Home() {
           onCopyPlaceToGroup={handleCopyPlaceToGroup}
         />
       )}
-
 
       {!isLoadingPlaces && activeTab === "timeline" && (
         <TimelineView
@@ -1537,6 +1544,8 @@ export default function Home() {
         isOpen={isVisitModalOpen}
         mode={visitFormMode}
         placeName={visitTargetPlace?.name ?? ""}
+        currentAuthorName={nickname.trim() || "未命名"}
+        currentDeviceId={deviceId}
         initialValues={editingVisitValues}
         onClose={closeVisitModal}
         onSubmit={handleAddVisit}

@@ -1,11 +1,26 @@
 export type PlaceStatus = "wantToGo" | "wantToReturn" | "memory";
 
+export type MemoryNoteItem = {
+  id: string;
+  noteDate: string;
+  text: string;
+  authorName?: string;
+  authorDeviceId?: string;
+  createdAt: string;
+  updatedAt?: string;
+};
+
 export type VisitItem = {
   id: string;
   visitDate: string;
+  /**
+   * 舊版單一文字欄位，保留相容舊資料。
+   * 新版留言板模式主要使用 memoryNotes。
+   */
   note: string;
   photos: string[];
   rating?: number;
+  memoryNotes?: MemoryNoteItem[];
   companions?: string[];
   authorName?: string;
   authorDeviceId?: string;

@@ -20,9 +20,13 @@ type MapViewProps = {
   onAddVisit: (place: PlaceItem) => void;
   onEditVisit: (placeId: string, visitId: string) => void;
   onDeleteVisit: (placeId: string, visitId: string) => void;
+  currentDeviceId: string;
   copyTargetGroups: CopyTargetGroup[];
   currentGroupId: string;
-  onCopyPlaceToGroup: (place: PlaceItem, targetGroupId: string) => Promise<boolean>;
+  onCopyPlaceToGroup: (
+    place: PlaceItem,
+    targetGroupId: string,
+  ) => Promise<boolean>;
 };
 
 type MapFilterState = {
@@ -54,6 +58,11 @@ const GOOGLE_MAP_LIBRARIES: "places"[] = ["places"];
 function formatDate(dateText?: string) {
   if (!dateText) return "";
   return dateText.replaceAll("-", "/");
+}
+
+function formatDotDate(dateText?: string) {
+  if (!dateText) return "";
+  return dateText.replaceAll("-", ".");
 }
 
 function formatShortDate(dateText?: string) {
@@ -371,6 +380,7 @@ export function MapView({
   onAddVisit,
   onEditVisit,
   onDeleteVisit,
+  currentDeviceId,
   copyTargetGroups,
   currentGroupId,
   onCopyPlaceToGroup,
@@ -494,7 +504,6 @@ export function MapView({
       return true;
     });
   }, [mapFilters, places]);
-
 
   const selectedTimingInfo = useMemo(() => {
     if (!selectedPlace) {
@@ -636,15 +645,19 @@ export function MapView({
     setIsCopyingPlace(true);
 
     try {
-      const copied = await onCopyPlaceToGroup(copyModalPlace, selectedCopyGroupId);
+      const copied = await onCopyPlaceToGroup(
+        copyModalPlace,
+        selectedCopyGroupId,
+      );
 
       if (!copied) {
         return;
       }
 
       const targetGroupName =
-        availableCopyTargetGroups.find((group) => group.id === selectedCopyGroupId)
-          ?.name ?? "目標群組";
+        availableCopyTargetGroups.find(
+          (group) => group.id === selectedCopyGroupId,
+        )?.name ?? "目標群組";
 
       window.alert(`已複製到「${targetGroupName}」`);
       setCopyModalPlace(null);
@@ -696,7 +709,8 @@ export function MapView({
     });
   }, []);
 
-  const shouldShowFloatingButtons = !selectedPlace && !timelinePlace && !copyModalPlace;
+  const shouldShowFloatingButtons =
+    !selectedPlace && !timelinePlace && !copyModalPlace;
 
   return (
     <section className="relative min-h-0 w-full min-w-0 flex-1">
@@ -841,8 +855,14 @@ export function MapView({
                       ) : (
                         <div className="flex h-full min-h-32 flex-col items-center justify-center px-2 text-center">
                           <div className="relative flex h-14 w-14 items-center justify-center">
-                            <span className={`text-6xl leading-none ${getSafeRating(selectedPlace.rating) === 0 ? "text-white [-webkit-text-stroke:2px_#ef4444]" : "text-red-500"}`}>♥</span>
-                            <span className={`absolute text-base font-black ${getSafeRating(selectedPlace.rating) === 0 ? "text-red-500" : "text-white"}`}>
+                            <span
+                              className={`text-6xl leading-none ${getSafeRating(selectedPlace.rating) === 0 ? "text-white [-webkit-text-stroke:2px_#ef4444]" : "text-red-500"}`}
+                            >
+                              ♥
+                            </span>
+                            <span
+                              className={`absolute text-base font-black ${getSafeRating(selectedPlace.rating) === 0 ? "text-red-500" : "text-white"}`}
+                            >
                               {getSafeRating(selectedPlace.rating)}
                             </span>
                           </div>
@@ -872,7 +892,9 @@ export function MapView({
                             onClick={(event) => {
                               event.stopPropagation();
 
-                              if (confirm(`確定刪除「${selectedPlace.name}」？`)) {
+                              if (
+                                confirm(`確定刪除「${selectedPlace.name}」？`)
+                              ) {
                                 onDeletePlace(selectedPlace.id);
                               }
                             }}
@@ -882,7 +904,6 @@ export function MapView({
                           </button>
                         </div>
                       </div>
-
 
                       {selectedTimingInfo.hasTiming ? (
                         <div
@@ -971,7 +992,7 @@ export function MapView({
                         >
                           📋 複製地點
                         </button>
-                                          </div>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1014,6 +1035,28 @@ export function MapView({
                         const firstPhoto = photos[0];
                         const secondPhoto = photos[1];
                         const hiddenPhotoCount = Math.max(0, photos.length - 2);
+                        const canDeleteVisit = Boolean(
+                          visit.authorDeviceId &&
+                          visit.authorDeviceId === currentDeviceId,
+                        );
+                        const rawMemoryNotes = Array.isArray(visit.memoryNotes)
+                          ? visit.memoryNotes
+                          : [];
+                        const displayMemoryNotes =
+                          rawMemoryNotes.length > 0
+                            ? rawMemoryNotes
+                            : visit.note?.trim()
+                              ? [
+                                  {
+                                    id: "legacy-note",
+                                    noteDate: visit.visitDate,
+                                    text: visit.note,
+                                    authorName: visit.authorName,
+                                    authorDeviceId: visit.authorDeviceId,
+                                    createdAt: visit.createdAt,
+                                  },
+                                ]
+                              : [];
 
                         return (
                           <div
@@ -1031,15 +1074,17 @@ export function MapView({
                                 📝
                               </button>
 
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  onDeleteVisit(timelinePlace.id, visit.id)
-                                }
-                                className="rounded-full bg-rose-100 px-2 py-1 text-xs font-bold text-rose-600"
-                              >
-                                🗑️
-                              </button>
+                              {canDeleteVisit ? (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    onDeleteVisit(timelinePlace.id, visit.id)
+                                  }
+                                  className="rounded-full bg-rose-100 px-2 py-1 text-xs font-bold text-rose-600"
+                                >
+                                  🗑️
+                                </button>
+                              ) : null}
                             </div>
 
                             <div className="min-w-0 pr-12">
@@ -1054,7 +1099,24 @@ export function MapView({
                               </div>
 
                               <div className="mt-2 max-h-24 overflow-y-auto whitespace-pre-wrap break-words pr-1 text-sm leading-5 text-slate-700">
-                                {visit.note || "沒有文字紀錄"}
+                                {displayMemoryNotes.length > 0 ? (
+                                  <div className="space-y-1.5">
+                                    {displayMemoryNotes.map((memoryNote) => (
+                                      <div key={memoryNote.id}>
+                                        <span className="font-bold text-slate-900">
+                                          {formatDotDate(
+                                            memoryNote.noteDate ||
+                                              visit.visitDate,
+                                          )}{" "}
+                                          {memoryNote.authorName || "未命名"}：
+                                        </span>
+                                        {memoryNote.text || "沒有文字紀錄"}
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  "沒有文字紀錄"
+                                )}
                               </div>
                             </div>
 
@@ -1152,7 +1214,9 @@ export function MapView({
 
                       <select
                         value={selectedCopyGroupId}
-                        onChange={(event) => setSelectedCopyGroupId(event.target.value)}
+                        onChange={(event) =>
+                          setSelectedCopyGroupId(event.target.value)
+                        }
                         disabled={isCopyingPlace}
                         className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 disabled:bg-slate-100"
                       >
