@@ -51,20 +51,9 @@ type TimingDisplayInfo = {
   detailText: string;
 };
 
-type StatusFilterState = {
-  showWantToGo: boolean;
-  showWantToReturn: boolean;
-  showMemory: boolean;
-};
-
 const RATING_CHIPS = [0, 1, 2, 3, 4, 5] as const;
 const TIMELINE_PHOTO_LIMIT = 2;
 
-const defaultStatusFilters: StatusFilterState = {
-  showWantToGo: true,
-  showWantToReturn: true,
-  showMemory: true,
-};
 
 function formatDate(dateText?: string) {
   if (!dateText) return "";
@@ -264,31 +253,24 @@ function getTimingDisplayInfo(
   };
 }
 
-function getStatusInfo(status: PlaceStatus | string | undefined) {
-  if (status === "wantToReturn") {
-    return {
-      label: "❤️ 還想去",
-      className: "bg-orange-100 text-orange-600",
-      emptyEmoji: "❤️",
-      emptyText: "一定還要再來",
-    };
-  }
+function getSafeRating(rating?: number) {
+  const value = Number(rating ?? 0);
 
-  if (status === "memory") {
-    return {
-      label: "♡ 打卡完成",
-      className: "bg-slate-200 text-slate-600",
-      emptyEmoji: "♡",
-      emptyText: "留在回憶裡",
-    };
-  }
+  if (!Number.isFinite(value)) return 0;
 
-  return {
-    label: "🤩 想去",
-    className: "bg-red-100 text-red-600",
-    emptyEmoji: "🤩",
-    emptyText: "好想去~",
-  };
+  return Math.max(0, Math.min(5, Math.round(value)));
+}
+
+function getRatingLabel(rating?: number) {
+  const safeRating = getSafeRating(rating);
+
+  if (safeRating === 0) return "沒去過";
+  if (safeRating === 1) return "CP值極低";
+  if (safeRating === 2) return "體驗過就好";
+  if (safeRating === 3) return "可去可不去";
+  if (safeRating === 4) return "值得再去";
+
+  return "我還要去";
 }
 
 function renderRating(rating?: number) {
@@ -317,8 +299,9 @@ export function PlaceListView({
   onCopyPlaceToGroup,
 }: PlaceListViewProps) {
   const [detailPlaceId, setDetailPlaceId] = useState<string | null>(null);
-  const [statusFilters, setStatusFilters] =
-    useState<StatusFilterState>(defaultStatusFilters);
+  const [selectedRatings, setSelectedRatings] = useState<number[]>([
+    ...RATING_CHIPS,
+  ]);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [photoPreview, setPhotoPreview] = useState<PhotoPreviewState>(null);
   const [copyModal, setCopyModal] = useState<CopyModalState>(null);
@@ -369,43 +352,20 @@ export function PlaceListView({
   }, [detailPlace?.visits]);
 
   const visiblePlaces = useMemo(() => {
-    return places.filter((place) => {
-      if (place.status === "wantToGo" && !statusFilters.showWantToGo) {
-        return false;
-      }
-
-      if (place.status === "wantToReturn" && !statusFilters.showWantToReturn) {
-        return false;
-      }
-
-      if (place.status === "memory" && !statusFilters.showMemory) {
-        return false;
-      }
-
-      return true;
-    });
-  }, [places, statusFilters]);
+    return places.filter((place) =>
+      selectedRatings.includes(getSafeRating(place.rating))
+    );
+  }, [places, selectedRatings]);
 
   const hasActiveFilters = useMemo(() => {
-    const hasStatusFilter =
-      !statusFilters.showWantToGo ||
-      !statusFilters.showWantToReturn ||
-      !statusFilters.showMemory;
+    const hasRatingFilter = selectedRatings.length !== RATING_CHIPS.length;
 
     return (
       filters.keyword.trim().length > 0 ||
-      filters.status !== "all" ||
-      filters.minRating !== "all" ||
       selectedTags.length > 0 ||
-      hasStatusFilter
+      hasRatingFilter
     );
-  }, [
-    filters.keyword,
-    filters.status,
-    filters.minRating,
-    selectedTags.length,
-    statusFilters,
-  ]);
+  }, [filters.keyword, selectedRatings.length, selectedTags.length]);
 
   const updateFilters = useCallback(
     (next: PlaceFilters) => {
@@ -443,29 +403,16 @@ export function PlaceListView({
     [filters, updateFilters]
   );
 
-  const handleStatusChange = useCallback((status: PlaceStatus) => {
-    setStatusFilters((prev) => {
-      if (status === "wantToGo") {
-        return { ...prev, showWantToGo: !prev.showWantToGo };
+
+  const handleMinRatingChange = useCallback((rating: number) => {
+    setSelectedRatings((prev) => {
+      if (prev.includes(rating)) {
+        return prev.filter((item) => item !== rating);
       }
 
-      if (status === "wantToReturn") {
-        return { ...prev, showWantToReturn: !prev.showWantToReturn };
-      }
-
-      return { ...prev, showMemory: !prev.showMemory };
+      return [...prev, rating].sort((a, b) => a - b);
     });
   }, []);
-
-  const handleMinRatingChange = useCallback(
-    (rating: number) => {
-      updateFilters({
-        ...filters,
-        minRating: filters.minRating === rating ? "all" : rating,
-      });
-    },
-    [filters, updateFilters]
-  );
 
   const handleToggleTag = useCallback(
     (tag: string) => {
@@ -603,44 +550,6 @@ export function PlaceListView({
 
         {isFilterOpen ? (
           <div className="mt-3 space-y-3">
-            <div className="grid grid-cols-3 gap-2">
-              <button
-                type="button"
-                onClick={() => handleStatusChange("wantToGo")}
-                className={`rounded-xl px-2 py-2 text-xs font-bold ${
-                  statusFilters.showWantToGo
-                    ? "bg-red-100 text-red-600"
-                    : "bg-slate-100 text-slate-400"
-                }`}
-              >
-                🤩 想去
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleStatusChange("wantToReturn")}
-                className={`rounded-xl px-2 py-2 text-xs font-bold ${
-                  statusFilters.showWantToReturn
-                    ? "bg-orange-100 text-orange-600"
-                    : "bg-slate-100 text-slate-400"
-                }`}
-              >
-                ❤️ 還想去
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleStatusChange("memory")}
-                className={`rounded-xl px-2 py-2 text-xs font-bold ${
-                  statusFilters.showMemory
-                    ? "bg-slate-300 text-slate-700"
-                    : "bg-slate-100 text-slate-400"
-                }`}
-              >
-                ♡ 打卡完成
-              </button>
-            </div>
-
             <input
               value={filters.keyword}
               onChange={(e) => handleKeywordChange(e.target.value)}
@@ -650,18 +559,20 @@ export function PlaceListView({
 
             <div className="flex flex-wrap gap-1">
               {ratingOptions.map((star) => {
-                const active = filters.minRating === star;
+                const active = selectedRatings.includes(star);
 
                 return (
                   <button
                     key={star}
                     type="button"
                     onClick={() => handleMinRatingChange(star)}
-                    className={`rounded-full px-2 py-1 text-xs ${
-                      active ? "bg-red-500 text-white" : "bg-slate-200"
+                    className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-bold ${
+                      active ? "bg-red-500 text-white" : "bg-slate-200 text-slate-700"
                     }`}
+                    title={`${star} - ${getRatingLabel(star)}`}
                   >
-                    {star}♥
+                    <span>{star === 0 ? "♡" : "♥"}</span>
+                    <span>{star}</span>
                   </button>
                 );
               })}
@@ -697,7 +608,6 @@ export function PlaceListView({
         visiblePlaces.map((place) => {
           const coverIndex = place.coverPhotoIndex ?? 0;
           const coverPhoto = place.photos?.[coverIndex] ?? place.photos?.[0];
-          const statusInfo = getStatusInfo(place.status);
           const lastVisitedText = formatDate(place.lastVisitedAt);
           const timingInfo = getTimingDisplayInfo(place, todayText);
 
@@ -718,11 +628,8 @@ export function PlaceListView({
                       className="h-full w-full object-cover"
                     />
                   ) : (
-                    <div className="flex h-full w-full flex-col items-center justify-center text-center">
-                      <div className="text-4xl">{statusInfo.emptyEmoji}</div>
-
-                      <div className="mt-2 text-xs font-bold text-slate-500">
-                        {statusInfo.emptyText}
+                    <div className="flex h-full w-full flex-col items-center justify-center px-2 text-center">                      <div className="text-xs font-bold text-slate-600">
+                        {getRatingLabel(place.rating)}
                       </div>
                     </div>
                   )}
@@ -740,11 +647,20 @@ export function PlaceListView({
                       </p>
                     </div>
 
-                    <div
-                      className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-bold ${statusInfo.className}`}
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+
+                        if (confirm(`確定刪除「${place.name}」？`)) {
+                          onDeletePlace(place.id);
+                        }
+                      }}
+                      className="shrink-0 rounded-full bg-rose-50 px-2.5 py-1 text-[11px] font-bold text-rose-600"
+                      aria-label="刪除地點"
                     >
-                      {statusInfo.label}
-                    </div>
+                      🗑️ 刪除
+                    </button>
                   </div>
 
                   {timingInfo.hasTiming ? (
@@ -798,29 +714,17 @@ export function PlaceListView({
                     {renderRating(place.rating)}
                   </div>
 
-                  <div className="mt-auto grid grid-cols-5 gap-1.5 pt-3">
+                  <div className="mt-auto grid grid-cols-2 gap-2 pt-3">
                     <button
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
                         handleStartNavigation(place);
                       }}
-                      className="rounded-xl bg-blue-500 px-1 py-2 text-xs font-bold text-white"
-                      aria-label="導航"
+                      className="rounded-xl bg-blue-500 px-2 py-2.5 text-xs font-bold text-white"
+                      aria-label="立刻出發"
                     >
-                      🚕
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onAddVisit(place);
-                      }}
-                      className="rounded-xl bg-orange-500 px-1 py-2 text-xs font-bold text-white"
-                      aria-label="加入回憶"
-                    >
-                      ＋
+                      🚕 立刻出發
                     </button>
 
                     <button
@@ -829,10 +733,22 @@ export function PlaceListView({
                         e.stopPropagation();
                         onEditPlace(place);
                       }}
-                      className="rounded-xl bg-slate-200 px-1 py-2 text-xs font-bold text-slate-700"
-                      aria-label="編輯"
+                      className="rounded-xl bg-slate-200 px-2 py-2.5 text-xs font-bold text-slate-700"
+                      aria-label="編輯地點"
                     >
-                      📝
+                      📝 編輯地點
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onAddVisit(place);
+                      }}
+                      className="rounded-xl bg-orange-500 px-2 py-2.5 text-xs font-bold text-white"
+                      aria-label="新增回憶"
+                    >
+                      ＋ 新增回憶
                     </button>
 
                     <button
@@ -841,27 +757,12 @@ export function PlaceListView({
                         e.stopPropagation();
                         handleOpenCopyModal(place);
                       }}
-                      className="rounded-xl bg-emerald-100 px-1 py-2 text-xs font-bold text-emerald-700"
-                      aria-label="複製到其他群組"
+                      className="rounded-xl bg-emerald-100 px-2 py-2.5 text-xs font-bold text-emerald-700"
+                      aria-label="複製地點"
                     >
-                      📋
+                      📋 複製地點
                     </button>
-
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-
-                        if (confirm("確定刪除？")) {
-                          onDeletePlace(place.id);
-                        }
-                      }}
-                      className="rounded-xl bg-rose-100 px-1 py-2 text-xs font-bold text-rose-600"
-                      aria-label="刪除"
-                    >
-                      🗑️
-                    </button>
-                  </div>
+                                  </div>
                 </div>
               </div>
             </article>
@@ -899,13 +800,6 @@ export function PlaceListView({
 
               <div className="mt-3 rounded-2xl bg-slate-50 p-3">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span
-                    className={`rounded-full px-2 py-1 text-xs font-bold ${
-                      getStatusInfo(detailPlace.status).className
-                    }`}
-                  >
-                    {getStatusInfo(detailPlace.status).label}
-                  </span>
 
                   <div className="flex items-center gap-0.5 text-sm">
                     {renderRating(detailPlace.rating)}
@@ -947,33 +841,33 @@ export function PlaceListView({
                   <button
                     type="button"
                     onClick={() => handleStartNavigation(detailPlace)}
-                    className="rounded-xl bg-blue-500 px-3 py-2 text-xs font-bold text-white"
+                    className="rounded-xl bg-blue-500 px-3 py-2.5 text-xs font-bold text-white"
                   >
-                    🚕 出發
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => onAddVisit(detailPlace)}
-                    className="rounded-xl bg-orange-500 px-3 py-2 text-xs font-bold text-white"
-                  >
-                    ＋回憶
+                    🚕 立刻出發
                   </button>
 
                   <button
                     type="button"
                     onClick={() => onEditPlace(detailPlace)}
-                    className="rounded-xl bg-slate-200 px-3 py-2 text-xs font-bold text-slate-700"
+                    className="rounded-xl bg-slate-200 px-3 py-2.5 text-xs font-bold text-slate-700"
                   >
-                    📝 編輯
+                    📝 編輯地點
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => onAddVisit(detailPlace)}
+                    className="rounded-xl bg-orange-500 px-3 py-2.5 text-xs font-bold text-white"
+                  >
+                    ＋ 新增回憶
                   </button>
 
                   <button
                     type="button"
                     onClick={() => handleOpenCopyModal(detailPlace)}
-                    className="rounded-xl bg-emerald-100 px-3 py-2 text-xs font-bold text-emerald-700"
+                    className="rounded-xl bg-emerald-100 px-3 py-2.5 text-xs font-bold text-emerald-700"
                   >
-                    📋 複製
+                    📋 複製地點
                   </button>
                 </div>
               </div>

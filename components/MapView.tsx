@@ -16,6 +16,7 @@ type MapViewProps = {
   onSelectPlace: (placeId: string | null) => void;
   onCreatePlace: () => void;
   onEditPlace: (place: PlaceItem) => void;
+  onDeletePlace: (placeId: string) => void;
   onAddVisit: (place: PlaceItem) => void;
   onEditVisit: (placeId: string, visitId: string) => void;
   onDeleteVisit: (placeId: string, visitId: string) => void;
@@ -25,9 +26,6 @@ type MapViewProps = {
 };
 
 type MapFilterState = {
-  showWantToGo: boolean;
-  showWantToReturn: boolean;
-  showMemory: boolean;
   query: string;
   stars: number[];
   tags: string[];
@@ -45,11 +43,8 @@ type TimingDisplayInfo = {
 };
 
 const defaultMapFilters: MapFilterState = {
-  showWantToGo: true,
-  showWantToReturn: true,
-  showMemory: true,
   query: "",
-  stars: [],
+  stars: [0, 1, 2, 3, 4, 5],
   tags: [],
 };
 
@@ -269,53 +264,46 @@ function isBestTimingActive(place: PlaceItem, today: string) {
   return getTimingDisplayInfo(place, today).isActive;
 }
 
-function getStatusInfo(status?: string) {
-  if (status === "wantToReturn") {
-    return {
-      label: "❤️ 還想去",
-      className: "bg-orange-100 text-orange-600",
-      emptyEmoji: "❤️",
-      markerText: "❤️",
-      markerKind: "emoji" as const,
-    };
-  }
+function getSafeRating(rating?: number) {
+  const value = Number(rating ?? 0);
 
-  if (status === "memory") {
-    return {
-      label: "♡ 去過",
-      className: "bg-slate-200 text-slate-600",
-      emptyEmoji: "♡",
-      markerText: "♡",
-      markerKind: "outlineHeart" as const,
-    };
-  }
+  if (!Number.isFinite(value)) return 0;
 
-  return {
-    label: "🤩 想去",
-    className: "bg-red-100 text-red-600",
-    emptyEmoji: "🤩",
-    markerText: "🤩",
-    markerKind: "emoji" as const,
-  };
+  return Math.max(0, Math.min(5, Math.round(value)));
+}
+
+function getRatingLabel(rating?: number) {
+  const safeRating = getSafeRating(rating);
+
+  if (safeRating === 0) return "沒去過";
+  if (safeRating === 1) return "CP值極低";
+  if (safeRating === 2) return "體驗過就好";
+  if (safeRating === 3) return "可去可不去";
+  if (safeRating === 4) return "值得再去";
+
+  return "我還要去";
 }
 
 function buildMarkerIcon(
-  markerText: string,
-  markerKind: "emoji" | "outlineHeart",
+  rating: number,
   selected: boolean,
   timingActive: boolean,
 ): google.maps.Icon {
-  const dim = selected ? 58 : timingActive ? 56 : 44;
+  const safeRating = getSafeRating(rating);
+  const dim = selected ? 64 : timingActive ? 60 : 50;
   const cx = dim / 2;
   const cy = dim / 2;
-  const fontSize = selected ? 34 : timingActive ? 32 : 28;
+  const heartScale = selected ? 1.85 : timingActive ? 1.72 : 1.42;
+  const heartTranslateX = cx - 12 * heartScale;
+  const heartTranslateY = cy - 12 * heartScale;
+  const fontSize = selected ? 20 : timingActive ? 19 : 16;
   const shadowOpacity = selected ? 0.28 : 0.22;
 
   const activeShell = timingActive
     ? `
-      <circle cx="${cx}" cy="${cy}" r="${dim / 2 - 5}" fill="#fff7ed" opacity="0.98" />
-      <circle cx="${cx}" cy="${cy}" r="${dim / 2 - 6}" fill="none" stroke="#fde68a" stroke-width="2" opacity="0.95" />
-      <circle cx="${cx}" cy="${cy}" r="${dim / 2 - 3}" fill="#fbbf24" opacity="0.18" />
+      <circle cx="${cx}" cy="${cy}" r="${dim / 2 - 4}" fill="#fff7ed" opacity="0.98" />
+      <circle cx="${cx}" cy="${cy}" r="${dim / 2 - 5}" fill="none" stroke="#fde68a" stroke-width="2" opacity="0.95" />
+      <circle cx="${cx}" cy="${cy}" r="${dim / 2 - 2}" fill="#fbbf24" opacity="0.18" />
     `
     : "";
 
@@ -323,24 +311,27 @@ function buildMarkerIcon(
     ? `<circle cx="${cx}" cy="${cy}" r="${dim / 2 - 1}" fill="#f59e0b" opacity="0.16" />`
     : "";
 
-  const markerContent =
-    markerKind === "outlineHeart"
-      ? `<text
-          x="${cx}"
-          y="${cy + fontSize * 0.34}"
-          font-size="${fontSize + 5}"
-          text-anchor="middle"
-          font-family="Arial, Helvetica, sans-serif"
-          font-weight="700"
-          fill="#6b7280"
-        >♡</text>`
-      : `<text
-          x="${cx}"
-          y="${cy + fontSize * 0.34}"
-          font-size="${fontSize}"
-          text-anchor="middle"
-          font-family="Apple Color Emoji, Segoe UI Emoji, Noto Color Emoji, Arial, sans-serif"
-        >${markerText}</text>`;
+  const heartPath = `
+    <path
+      d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"
+      transform="translate(${heartTranslateX} ${heartTranslateY}) scale(${heartScale})"
+      fill="${safeRating === 0 ? "#ffffff" : "#ef4444"}"
+      stroke="#ff2d55"
+      stroke-width="${safeRating === 0 ? 2.2 : 1.2}"
+      stroke-linejoin="round"
+    />`;
+
+  const markerContent = `
+    ${heartPath}
+    <text
+      x="${cx}"
+      y="${cy + fontSize * 0.34}"
+      font-size="${fontSize}"
+      text-anchor="middle"
+      font-family="Arial, Helvetica, sans-serif"
+      font-weight="900"
+      fill="${safeRating === 0 ? "#ef4444" : "#ffffff"}"
+    >${safeRating}</text>`;
 
   const svg = `
   <svg xmlns="http://www.w3.org/2000/svg" width="${dim}" height="${dim}" viewBox="0 0 ${dim} ${dim}">
@@ -376,6 +367,7 @@ export function MapView({
   onSelectPlace,
   onCreatePlace,
   onEditPlace,
+  onDeletePlace,
   onAddVisit,
   onEditVisit,
   onDeleteVisit,
@@ -476,14 +468,6 @@ export function MapView({
     const q = mapFilters.query.trim().toLowerCase();
 
     return places.filter((place) => {
-      if (place.status === "wantToGo" && !mapFilters.showWantToGo) return false;
-
-      if (place.status === "wantToReturn" && !mapFilters.showWantToReturn) {
-        return false;
-      }
-
-      if (place.status === "memory" && !mapFilters.showMemory) return false;
-
       if (
         mapFilters.stars.length > 0 &&
         !mapFilters.stars.includes(place.rating)
@@ -511,10 +495,6 @@ export function MapView({
     });
   }, [mapFilters, places]);
 
-  const selectedStatusInfo = useMemo(() => {
-    if (!selectedPlace) return null;
-    return getStatusInfo(selectedPlace.status);
-  }, [selectedPlace]);
 
   const selectedTimingInfo = useMemo(() => {
     if (!selectedPlace) {
@@ -544,14 +524,12 @@ export function MapView({
     const nextIcons = new Map<string, google.maps.Icon>();
 
     filteredPlaces.forEach((place) => {
-      const info = getStatusInfo(place.status);
       const timingActive = isBestTimingActive(place, todayText);
 
       nextIcons.set(
         place.id,
         buildMarkerIcon(
-          info.markerText,
-          info.markerKind,
+          place.rating,
           selectedPlaceId === place.id,
           timingActive,
         ),
@@ -785,59 +763,6 @@ export function MapView({
 
                 {isFilterOpen ? (
                   <div className="mt-3 space-y-3">
-                    <div className="grid grid-cols-3 gap-2">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setMapFilters((f) => ({
-                            ...f,
-                            showWantToGo: !f.showWantToGo,
-                          }))
-                        }
-                        className={`rounded-xl px-2 py-2 text-xs font-bold ${
-                          mapFilters.showWantToGo
-                            ? "bg-red-100 text-red-600"
-                            : "bg-slate-100 text-slate-400"
-                        }`}
-                      >
-                        ❤️ 想去
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setMapFilters((f) => ({
-                            ...f,
-                            showWantToReturn: !f.showWantToReturn,
-                          }))
-                        }
-                        className={`rounded-xl px-2 py-2 text-xs font-bold ${
-                          mapFilters.showWantToReturn
-                            ? "bg-orange-100 text-orange-600"
-                            : "bg-slate-100 text-slate-400"
-                        }`}
-                      >
-                        🤩 還想去
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setMapFilters((f) => ({
-                            ...f,
-                            showMemory: !f.showMemory,
-                          }))
-                        }
-                        className={`rounded-xl px-2 py-2 text-xs font-bold ${
-                          mapFilters.showMemory
-                            ? "bg-slate-300 text-slate-700"
-                            : "bg-slate-100 text-slate-400"
-                        }`}
-                      >
-                        ♡ 去過
-                      </button>
-                    </div>
-
                     <input
                       type="search"
                       value={mapFilters.query}
@@ -857,13 +782,15 @@ export function MapView({
                           key={star}
                           type="button"
                           onClick={() => toggleStar(star)}
-                          className={`rounded-full px-2 py-1 text-xs ${
+                          className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-bold ${
                             mapFilters.stars.includes(star)
                               ? "bg-red-500 text-white"
-                              : "bg-slate-200"
+                              : "bg-slate-200 text-slate-700"
                           }`}
+                          title={`${star} - ${getRatingLabel(star)}`}
                         >
-                          {star}♥
+                          <span>{star === 0 ? "♡" : "♥"}</span>
+                          <span>{star}</span>
                         </button>
                       ))}
                     </div>
@@ -891,7 +818,7 @@ export function MapView({
               </div>
             </div>
 
-            {selectedPlace && selectedStatusInfo ? (
+            {selectedPlace ? (
               <div className="absolute bottom-24 left-3 right-3 z-40">
                 <div
                   className={`overflow-hidden rounded-3xl bg-white shadow-2xl ${
@@ -912,8 +839,17 @@ export function MapView({
                           className="h-full w-full object-cover"
                         />
                       ) : (
-                        <div className="flex h-full min-h-32 items-center justify-center text-5xl">
-                          {selectedStatusInfo.emptyEmoji}
+                        <div className="flex h-full min-h-32 flex-col items-center justify-center px-2 text-center">
+                          <div className="relative flex h-14 w-14 items-center justify-center">
+                            <span className={`text-6xl leading-none ${getSafeRating(selectedPlace.rating) === 0 ? "text-white [-webkit-text-stroke:2px_#ef4444]" : "text-red-500"}`}>♥</span>
+                            <span className={`absolute text-base font-black ${getSafeRating(selectedPlace.rating) === 0 ? "text-red-500" : "text-white"}`}>
+                              {getSafeRating(selectedPlace.rating)}
+                            </span>
+                          </div>
+
+                          <div className="mt-2 text-xs font-bold text-slate-600">
+                            {getRatingLabel(selectedPlace.rating)}
+                          </div>
                         </div>
                       )}
                     </div>
@@ -930,25 +866,23 @@ export function MapView({
                           </div>
                         </div>
 
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            onSelectPlace(null);
-                          }}
-                          className="rounded-full bg-slate-100 px-2 py-1 text-xs"
-                        >
-                          ✕
-                        </button>
+                        <div className="flex shrink-0 items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+
+                              if (confirm(`確定刪除「${selectedPlace.name}」？`)) {
+                                onDeletePlace(selectedPlace.id);
+                              }
+                            }}
+                            className="rounded-full bg-rose-50 px-2.5 py-1 text-xs font-bold text-rose-600"
+                          >
+                            🗑️ 刪除
+                          </button>
+                        </div>
                       </div>
 
-                      <div className="mt-2 flex flex-wrap gap-1.5">
-                        <span
-                          className={`rounded-full px-2 py-1 text-xs font-bold ${selectedStatusInfo.className}`}
-                        >
-                          {selectedStatusInfo.label}
-                        </span>
-                      </div>
 
                       {selectedTimingInfo.hasTiming ? (
                         <div
@@ -993,41 +927,39 @@ export function MapView({
                         {renderRating(selectedPlace.rating)}
                       </div>
 
-                      <div className="mt-auto space-y-2 pt-3">
-                        <div className="grid grid-cols-3 gap-2">
-                          <button
-                            type="button"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              openGoogleMapsDirections(selectedPlace);
-                            }}
-                            className="rounded-xl bg-blue-500 px-2 py-2 text-xs font-bold text-white"
-                          >
-                            🚕 出發
-                          </button>
+                      <div className="mt-auto grid grid-cols-2 gap-2 pt-3">
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            openGoogleMapsDirections(selectedPlace);
+                          }}
+                          className="rounded-xl bg-blue-500 px-2 py-2.5 text-xs font-bold text-white"
+                        >
+                          🚕 立刻出發
+                        </button>
 
-                          <button
-                            type="button"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              onAddVisit(selectedPlace);
-                            }}
-                            className="rounded-xl bg-orange-500 px-2 py-2 text-xs font-bold text-white"
-                          >
-                            ＋回憶
-                          </button>
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onEditPlace(selectedPlace);
+                          }}
+                          className="rounded-xl bg-slate-200 px-2 py-2.5 text-xs font-bold text-slate-700"
+                        >
+                          📝 編輯地點
+                        </button>
 
-                          <button
-                            type="button"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              onEditPlace(selectedPlace);
-                            }}
-                            className="rounded-xl bg-slate-200 px-2 py-2 text-xs font-bold text-slate-700"
-                          >
-                            📝 編輯
-                          </button>
-                        </div>
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onAddVisit(selectedPlace);
+                          }}
+                          className="rounded-xl bg-orange-500 px-2 py-2.5 text-xs font-bold text-white"
+                        >
+                          ＋ 新增回憶
+                        </button>
 
                         <button
                           type="button"
@@ -1035,11 +967,11 @@ export function MapView({
                             event.stopPropagation();
                             handleOpenCopyModal(selectedPlace);
                           }}
-                          className="w-full rounded-xl bg-amber-100 px-2 py-2 text-xs font-bold text-amber-700"
+                          className="rounded-xl bg-emerald-100 px-2 py-2.5 text-xs font-bold text-emerald-700"
                         >
-                          📋 複製到其他群組
+                          📋 複製地點
                         </button>
-                      </div>
+                                          </div>
                     </div>
                   </div>
                 </div>

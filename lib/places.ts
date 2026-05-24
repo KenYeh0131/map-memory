@@ -7,6 +7,9 @@ export type VisitItem = {
   photos: string[];
   rating?: number;
   companions?: string[];
+  authorName?: string;
+  authorDeviceId?: string;
+  sortOrder?: number;
   createdAt: string;
   updatedAt?: string;
 };
@@ -79,6 +82,19 @@ export const STATUS_OPTIONS = [
 ] as const;
 
 export const RATING_OPTIONS = [0, 1, 2, 3, 4, 5] as const;
+
+export const RATING_LABELS: Record<number, string> = {
+  0: "沒去過",
+  1: "CP值極低",
+  2: "體驗過就好",
+  3: "可去可不去",
+  4: "值得再去",
+  5: "我還要去",
+};
+
+export function getRatingLabel(rating?: number) {
+  return RATING_LABELS[Math.max(0, Math.min(5, rating ?? 0))] ?? "沒去過";
+}
 
 const now = new Date().toISOString();
 

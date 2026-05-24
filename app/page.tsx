@@ -611,7 +611,7 @@ export default function Home() {
         filters.status === "all" || place.status === filters.status;
 
       const matchesRating =
-        filters.minRating === "all" || place.rating >= filters.minRating;
+        filters.minRating === "all" || Math.round(Number(place.rating ?? 0)) === filters.minRating;
 
       const matchesTags =
         selectedTags.length === 0 ||
@@ -660,6 +660,11 @@ export default function Home() {
 
     if (!targetVisit) {
       window.alert("找不到這筆回憶");
+      return;
+    }
+
+    if (targetVisit.authorDeviceId && targetVisit.authorDeviceId !== deviceId) {
+      window.alert("只有填寫這筆回憶的人可以編輯");
       return;
     }
 
@@ -1054,6 +1059,12 @@ export default function Home() {
         const currentVisits = Array.isArray(visitTargetPlace.visits)
           ? visitTargetPlace.visits
           : [];
+        const editingVisit = currentVisits.find((visit) => visit.id === editingVisitId);
+
+        if (editingVisit?.authorDeviceId && editingVisit.authorDeviceId !== deviceId) {
+          window.alert("只有填寫這筆回憶的人可以編輯");
+          return;
+        }
 
         const nextVisits = currentVisits.map((visit) =>
           visit.id === editingVisitId
@@ -1078,18 +1089,29 @@ export default function Home() {
         return;
       }
 
+      const currentVisits = Array.isArray(visitTargetPlace.visits)
+        ? visitTargetPlace.visits
+        : [];
+
+      const sameDateVisits = currentVisits.filter(
+        (visit) => visit.visitDate === values.visitDate
+      );
+      const maxSortOrder = sameDateVisits.reduce((max, visit, index) => {
+        const sortOrder = typeof visit.sortOrder === "number" ? visit.sortOrder : index;
+        return Math.max(max, sortOrder);
+      }, -1);
+
       const nextVisit = {
         id: `visit-${Date.now()}`,
         visitDate: values.visitDate,
         note: values.note,
         photos: values.photos,
         rating: values.rating ?? 0,
+        authorName: nickname.trim() || "未命名",
+        authorDeviceId: deviceId,
+        sortOrder: maxSortOrder + 1,
         createdAt: now,
       };
-
-      const currentVisits = Array.isArray(visitTargetPlace.visits)
-        ? visitTargetPlace.visits
-        : [];
 
       const nextVisits = [nextVisit, ...currentVisits];
       const updatedPlace = buildVisitSummaryUpdate(nextVisits);
@@ -1131,6 +1153,12 @@ export default function Home() {
       const currentVisits = Array.isArray(targetPlace.visits)
         ? targetPlace.visits
         : [];
+      const targetVisit = currentVisits.find((visit) => visit.id === visitId);
+
+      if (targetVisit?.authorDeviceId && targetVisit.authorDeviceId !== deviceId) {
+        window.alert("只有填寫這筆回憶的人可以刪除");
+        return;
+      }
 
       const nextVisits = currentVisits.filter((visit) => visit.id !== visitId);
 
@@ -1143,6 +1171,62 @@ export default function Home() {
     } catch (error) {
       console.error(error);
       window.alert("刪除回憶失敗，請稍後再試");
+    }
+  };
+
+  const handleReorderTimelineVisits = async (
+    visitDate: string,
+    orderedItems: { placeId: string; visitId: string }[]
+  ) => {
+    if (!visitDate || orderedItems.length === 0) return;
+
+    try {
+      const orderMap = new Map(
+        orderedItems.map((item, index) => [`${item.placeId}__${item.visitId}`, index])
+      );
+      const affectedPlaceIds = Array.from(
+        new Set(orderedItems.map((item) => item.placeId))
+      );
+
+      await Promise.all(
+        affectedPlaceIds.map(async (placeId) => {
+          const targetPlace = places.find((place) => place.id === placeId);
+
+          if (!targetPlace) return;
+
+          const currentVisits = Array.isArray(targetPlace.visits)
+            ? targetPlace.visits
+            : [];
+
+          const nextVisits = currentVisits.map((visit, fallbackIndex) => {
+            if (visit.visitDate !== visitDate) return visit;
+
+            const nextSortOrder = orderMap.get(`${placeId}__${visit.id}`);
+
+            if (typeof nextSortOrder !== "number") {
+              return {
+                ...visit,
+                sortOrder:
+                  typeof visit.sortOrder === "number" ? visit.sortOrder : fallbackIndex,
+              };
+            }
+
+            return {
+              ...visit,
+              sortOrder: nextSortOrder,
+              updatedAt: new Date().toISOString(),
+            };
+          });
+
+          await updateDoc(
+            doc(db, "groups", safeCurrentGroupId, "places", placeId),
+            buildVisitSummaryUpdate(nextVisits)
+          );
+        })
+      );
+    } catch (error) {
+      console.error(error);
+      window.alert("調整回憶順序失敗，請稍後再試");
     }
   };
 
@@ -1367,6 +1451,7 @@ export default function Home() {
             onSelectPlace={setSelectedPlaceId}
             onCreatePlace={openCreateForm}
             onEditPlace={openEditForm}
+            onDeletePlace={handleDeletePlace}
             onAddVisit={openVisitModal}
             onEditVisit={openEditVisitModal}
             onDeleteVisit={handleDeleteVisit}
@@ -1399,9 +1484,10 @@ export default function Home() {
         <TimelineView
           places={places}
           availableTags={availableTags}
-          onAddVisit={openVisitModal}
+          currentDeviceId={deviceId}
           onEditVisit={openEditVisitModal}
           onDeleteVisit={handleDeleteVisit}
+          onReorderVisits={handleReorderTimelineVisits}
         />
       )}
 

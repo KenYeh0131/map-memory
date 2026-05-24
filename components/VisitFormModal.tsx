@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { getDownloadURL, ref, uploadBytesResumable } from "firebase/storage";
 import { storage } from "@/lib/firebase";
-import { RATING_OPTIONS } from "@/lib/places";
+import { RATING_LABELS, RATING_OPTIONS } from "@/lib/places";
 
 export type VisitFormValues = {
   visitDate: string;
@@ -287,6 +287,56 @@ export function VisitFormModal({
     setPhotos((prev) => prev.filter((photo) => photo !== photoUrl));
   };
 
+
+
+  const getComparableValues = () => ({
+    visitDate,
+    note: note.trim(),
+    photos,
+    rating,
+  });
+
+  const getInitialComparableValues = () => {
+    if (mode === "edit" && initialValues) {
+      return {
+        visitDate: initialValues.visitDate || todayText(),
+        note: (initialValues.note || "").trim(),
+        photos: Array.isArray(initialValues.photos) ? initialValues.photos : [],
+        rating: initialValues.rating ?? 0,
+      };
+    }
+
+    return {
+      visitDate: todayText(),
+      note: "",
+      photos: [],
+      rating: 0,
+    };
+  };
+
+  const isDirty = () => {
+    return (
+      JSON.stringify(getComparableValues()) !==
+      JSON.stringify(getInitialComparableValues())
+    );
+  };
+
+  const handleRequestClose = () => {
+    if (isUploading) {
+      window.alert("照片上傳中，請稍候");
+      return;
+    }
+
+    if (isSaving) return;
+
+    if (isDirty()) {
+      const ok = window.confirm("尚未儲存內容，確定離開？");
+      if (!ok) return;
+    }
+
+    onClose();
+  };
+
   const handleSubmit = async () => {
     if (!visitDate) {
       window.alert("請選擇拜訪日期");
@@ -323,8 +373,14 @@ export function VisitFormModal({
   };
 
   return (
-    <div className="fixed inset-0 z-[300] flex items-end justify-center bg-black/50 px-3 pb-[calc(6rem+env(safe-area-inset-bottom,0px))] pt-3">
-      <div className="flex max-h-[calc(100dvh-7rem)] w-full max-w-md flex-col overflow-hidden rounded-3xl bg-white shadow-2xl">
+    <div
+      className="fixed inset-0 z-[300] flex items-end justify-center bg-black/50 px-3 pb-[calc(6rem+env(safe-area-inset-bottom,0px))] pt-3"
+      onClick={handleRequestClose}
+    >
+      <div
+        className="flex max-h-[calc(100dvh-7rem)] w-full max-w-md flex-col overflow-hidden rounded-3xl bg-white shadow-2xl"
+        onClick={(event) => event.stopPropagation()}
+      >
         <div className="shrink-0 border-b border-slate-100 bg-white p-4 pb-3">
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
@@ -339,7 +395,7 @@ export function VisitFormModal({
 
             <button
               type="button"
-              onClick={onClose}
+              onClick={handleRequestClose}
               className="shrink-0 rounded-full bg-slate-100 px-3 py-1.5 text-sm"
             >
               ✕
@@ -393,7 +449,7 @@ export function VisitFormModal({
               >
                 {RATING_OPTIONS.map((option) => (
                   <option key={option} value={option}>
-                    {option} 顆心
+                    {option} - {RATING_LABELS[option]}
                   </option>
                 ))}
               </select>

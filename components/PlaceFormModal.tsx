@@ -6,7 +6,7 @@ import { getDownloadURL, ref, uploadBytesResumable } from "firebase/storage";
 import { storage } from "@/lib/firebase";
 import {
   RATING_OPTIONS,
-  STATUS_OPTIONS,
+  RATING_LABELS,
   type BestTimingItem,
   type PlaceItem,
   type PlaceStatus,
@@ -159,9 +159,6 @@ function uploadFileWithProgress(
   });
 }
 
-function todayText() {
-  return new Date().toISOString().slice(0, 10);
-}
 
 function parseTags(tagsText: string) {
   return tagsText
@@ -450,14 +447,6 @@ export function PlaceFormModal({
     }));
   };
 
-  const handleStatusChange = (nextStatus: PlaceStatus) => {
-    setFormValues((prev) => ({
-      ...prev,
-      status: nextStatus,
-      completedDate:
-        nextStatus === "wantToReturn" ? prev.completedDate || todayText() : "",
-    }));
-  };
 
   const syncTags = (nextTags: string[]) => {
     handleChange("tagsText", Array.from(new Set(nextTags)).join(", "));
@@ -511,8 +500,8 @@ export function PlaceFormModal({
     await onSubmit({
       ...formValues,
       coverPhotoIndex: safeCoverPhotoIndex,
-      completedDate:
-        formValues.status === "wantToReturn" ? formValues.completedDate : "",
+      status: "wantToGo",
+      completedDate: "",
       bestTimings: normalizeBestTimings(formValues.bestTimings),
     });
   };
@@ -651,16 +640,56 @@ export function PlaceFormModal({
     );
   };
 
+  const getComparableValues = (values: PlaceFormValues) => ({
+    ...values,
+    coverPhotoIndex:
+      values.photos.length === 0
+        ? 0
+        : Math.min(Math.max(values.coverPhotoIndex, 0), values.photos.length - 1),
+    status: "wantToGo" as PlaceStatus,
+    completedDate: "",
+    bestTimings: normalizeBestTimings(values.bestTimings),
+  });
+
+  const isDirty = () => {
+    const initialValues = buildInitialValues(initialPlace);
+
+    return (
+      JSON.stringify(getComparableValues(formValues)) !==
+      JSON.stringify(getComparableValues(initialValues))
+    );
+  };
+
+  const handleRequestClose = () => {
+    if (isUploadingPhoto) {
+      window.alert("照片上傳中，請稍候");
+      return;
+    }
+
+    if (isDirty()) {
+      const ok = window.confirm("尚未儲存內容，確定離開？");
+      if (!ok) return;
+    }
+
+    onClose();
+  };
+
   return (
-    <div className="fixed inset-0 z-[250] flex items-end justify-center bg-slate-900/50 px-3 pb-[calc(6rem+env(safe-area-inset-bottom,0px))] pt-3">
-      <div className="flex max-h-[calc(100dvh-7rem)] w-full max-w-md flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+    <div
+      className="fixed inset-0 z-[250] flex items-end justify-center bg-slate-900/50 px-3 pb-[calc(6rem+env(safe-area-inset-bottom,0px))] pt-3"
+      onClick={handleRequestClose}
+    >
+      <div
+        className="flex max-h-[calc(100dvh-7rem)] w-full max-w-md flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
+        onClick={(event) => event.stopPropagation()}
+      >
         <div className="shrink-0 p-4 pb-2">
           <div className="mb-3 flex items-center justify-between">
             <h2 className="text-lg font-bold text-slate-900">{title}</h2>
 
             <button
               type="button"
-              onClick={onClose}
+              onClick={handleRequestClose}
               className="rounded-md px-2 py-1 text-sm font-semibold text-slate-700"
             >
               關閉
@@ -689,41 +718,6 @@ export function PlaceFormModal({
               ) : null}
             </label>
 
-            <label className="block text-sm">
-              <span className={labelTitleClassName}>
-                狀態
-                <span className="ml-1 font-bold text-red-500">(必填)</span>
-              </span>
-
-              <select
-                value={formValues.status}
-                onChange={(event) =>
-                  handleStatusChange(event.target.value as PlaceStatus)
-                }
-                className={inputClassName}
-              >
-                {STATUS_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            {formValues.status === "wantToReturn" ? (
-              <label className="block text-sm">
-                <span className={labelTitleClassName}>完成日期</span>
-
-                <input
-                  type="date"
-                  value={formValues.completedDate || todayText()}
-                  onChange={(event) =>
-                    handleChange("completedDate", event.target.value)
-                  }
-                  className={inputClassName}
-                />
-              </label>
-            ) : null}
 
             <label className="block text-sm">
               <span className={labelTitleClassName}>
@@ -792,7 +786,7 @@ export function PlaceFormModal({
               >
                 {RATING_OPTIONS.map((option) => (
                   <option key={option} value={option}>
-                    {option}
+                    {option} - {RATING_LABELS[option]}
                   </option>
                 ))}
               </select>
