@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { GoogleMap, MarkerF, useJsApiLoader } from "@react-google-maps/api";
-import { openGoogleMapsDirections } from "@/lib/navigation";
+import { PlaceCard } from "@/components/PlaceCard";
 import type { BestTimingItem, PlaceItem } from "@/lib/places";
 
 type CopyTargetGroup = {
@@ -505,17 +505,6 @@ export function MapView({
     });
   }, [mapFilters, places]);
 
-  const selectedTimingInfo = useMemo(() => {
-    if (!selectedPlace) {
-      return {
-        hasTiming: false,
-        isActive: false,
-        detailText: "",
-      };
-    }
-
-    return getTimingDisplayInfo(selectedPlace, todayText);
-  }, [selectedPlace, todayText]);
 
   const sortedTimelineVisits = useMemo(() => {
     if (!timelinePlace?.visits) return [];
@@ -834,168 +823,14 @@ export function MapView({
 
             {selectedPlace ? (
               <div className="absolute bottom-24 left-3 right-3 z-40">
-                <div
-                  className={`overflow-hidden rounded-3xl bg-white shadow-2xl ${
-                    selectedTimingInfo.isActive ? "ring-4 ring-amber-300" : ""
-                  }`}
-                  onClick={() => handleOpenTimeline(selectedPlace)}
-                >
-                  <div className="flex">
-                    <div className="w-32 shrink-0 bg-slate-100">
-                      {selectedPlace.photos?.length > 0 ? (
-                        <img
-                          src={
-                            selectedPlace.photos[
-                              selectedPlace.coverPhotoIndex ?? 0
-                            ] ?? selectedPlace.photos[0]
-                          }
-                          alt={selectedPlace.name}
-                          className="h-full w-full object-cover"
-                        />
-                      ) : (
-                        <div className="flex h-full min-h-32 flex-col items-center justify-center px-2 text-center">
-                          <div className="relative flex h-14 w-14 items-center justify-center">
-                            <span
-                              className={`text-6xl leading-none ${getSafeRating(selectedPlace.rating) === 0 ? "text-white [-webkit-text-stroke:2px_#ef4444]" : "text-red-500"}`}
-                            >
-                              ♥
-                            </span>
-                            <span
-                              className={`absolute text-base font-black ${getSafeRating(selectedPlace.rating) === 0 ? "text-red-500" : "text-white"}`}
-                            >
-                              {getSafeRating(selectedPlace.rating)}
-                            </span>
-                          </div>
-
-                          <div className="mt-2 text-xs font-bold text-slate-600">
-                            {getRatingLabel(selectedPlace.rating)}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="flex min-w-0 flex-1 flex-col p-4">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <div className="truncate text-lg font-bold">
-                            {selectedPlace.name}
-                          </div>
-
-                          <div className="mt-1 text-xs text-slate-500">
-                            {selectedPlace.address}
-                          </div>
-                        </div>
-
-                        <div className="flex shrink-0 items-center gap-1.5">
-                          <button
-                            type="button"
-                            onClick={(event) => {
-                              event.stopPropagation();
-
-                              if (
-                                confirm(`確定刪除「${selectedPlace.name}」？`)
-                              ) {
-                                onDeletePlace(selectedPlace.id);
-                              }
-                            }}
-                            className="rounded-full bg-rose-50 px-2.5 py-1 text-xs font-bold text-rose-600"
-                          >
-                            🗑️ 刪除
-                          </button>
-                        </div>
-                      </div>
-
-                      {selectedTimingInfo.hasTiming ? (
-                        <div
-                          className={`mt-2 rounded-xl px-2 py-1.5 text-xs font-semibold ${
-                            selectedTimingInfo.isActive
-                              ? "bg-amber-50 text-amber-700"
-                              : "bg-slate-50 text-slate-500"
-                          }`}
-                        >
-                          {selectedTimingInfo.detailText}
-                        </div>
-                      ) : null}
-
-                      <div className="mt-2 flex flex-wrap gap-1">
-                        {selectedPlace.tags?.map((tag) => (
-                          <span
-                            key={tag}
-                            className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px]"
-                          >
-                            #{tag}
-                          </span>
-                        ))}
-                      </div>
-
-                      <div className="mt-2 text-xs text-slate-500">
-                        拜訪次數：
-                        <span className="font-bold text-slate-700">
-                          {selectedPlace.visitCount ?? 0}
-                        </span>
-                      </div>
-
-                      {selectedPlace.lastVisitedAt ? (
-                        <div className="mt-1 text-xs text-slate-500">
-                          最近拜訪：
-                          <span className="font-bold text-slate-700">
-                            {formatDate(selectedPlace.lastVisitedAt)}
-                          </span>
-                        </div>
-                      ) : null}
-
-                      <div className="mt-2 flex items-center gap-0.5">
-                        {renderRating(selectedPlace.rating)}
-                      </div>
-
-                      <div className="mt-auto grid grid-cols-2 gap-2 pt-3">
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            openGoogleMapsDirections(selectedPlace);
-                          }}
-                          className="rounded-xl bg-blue-500 px-2 py-2.5 text-xs font-bold text-white"
-                        >
-                          🚕 立刻出發
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            onEditPlace(selectedPlace);
-                          }}
-                          className="rounded-xl bg-slate-200 px-2 py-2.5 text-xs font-bold text-slate-700"
-                        >
-                          📝 編輯地點
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            onAddVisit(selectedPlace);
-                          }}
-                          className="rounded-xl bg-orange-500 px-2 py-2.5 text-xs font-bold text-white"
-                        >
-                          ＋ 新增回憶
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            handleOpenCopyModal(selectedPlace);
-                          }}
-                          className="rounded-xl bg-emerald-100 px-2 py-2.5 text-xs font-bold text-emerald-700"
-                        >
-                          📋 複製地點
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                <PlaceCard
+                  place={selectedPlace}
+                  onOpenDetail={handleOpenTimeline}
+                  onEditPlace={onEditPlace}
+                  onDeletePlace={onDeletePlace}
+                  onAddVisit={onAddVisit}
+                  onCopyPlace={handleOpenCopyModal}
+                />
               </div>
             ) : null}
 

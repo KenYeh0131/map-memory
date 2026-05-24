@@ -368,6 +368,11 @@ export function PlaceFormModal({
 
     if (!cached) return;
 
+    console.log("[Google API] cache hit", {
+      name: formValues.name,
+      address: debouncedAddress,
+    });
+
     setFormValues((prev) => {
       if (prev.lat === cached.lat && prev.lng === cached.lng) return prev;
 
@@ -382,6 +387,15 @@ export function PlaceFormModal({
 
   const shouldUseAddressAutocomplete =
     isLoaded && debouncedAddress.length >= AUTOCOMPLETE_MIN_LENGTH;
+
+  useEffect(() => {
+    if (!shouldUseAddressAutocomplete) return;
+
+    console.log("[Google API] autocomplete enabled", {
+      addressLength: debouncedAddress.length,
+      debounceMs: AUTOCOMPLETE_DEBOUNCE_MS,
+    });
+  }, [debouncedAddress.length, shouldUseAddressAutocomplete]);
 
   const title = useMemo(
     () => (mode === "create" ? "新增地點" : "編輯地點"),
@@ -486,6 +500,11 @@ export function PlaceFormModal({
   };
 
   const handleAddressPlaceChanged = () => {
+    console.log("[Google API] request", {
+      source: "address autocomplete selected",
+      address: formValues.address,
+    });
+
     const place = addressAutocompleteRef.current?.getPlace();
 
     if (!place) {
@@ -527,9 +546,24 @@ export function PlaceFormModal({
   };
 
   const handleAddressInputChange = (nextAddress: string) => {
+    if (!nextAddress.trim()) {
+      setFormValues((prev) => ({
+        ...prev,
+        address: "",
+        lat: undefined,
+        lng: undefined,
+      }));
+      return;
+    }
+
     const cached = readCachedPlace(formValues.name, nextAddress);
 
     if (cached) {
+      console.log("[Google API] cache hit", {
+        name: formValues.name,
+        address: nextAddress,
+      });
+
       setFormValues((prev) => ({
         ...prev,
         address: nextAddress,

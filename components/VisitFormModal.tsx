@@ -31,7 +31,7 @@ type VisitFormModalProps = {
   onSubmit: (values: VisitFormValues) => void | Promise<void>;
 };
 
-const MAX_PHOTOS = 10;
+const MAX_PHOTOS = 15;
 const PREVIEW_LIMIT = 3;
 
 type UploadStatus = {
@@ -76,7 +76,7 @@ function normalizeMemoryNotes(
         authorName: item.authorName || initialValues?.authorName || "",
         authorDeviceId: item.authorDeviceId || initialValues?.authorDeviceId || "",
         createdAt: item.createdAt || new Date().toISOString(),
-        updatedAt: item.updatedAt,
+        ...(item.updatedAt ? { updatedAt: item.updatedAt } : {}),
       }));
   }
 
@@ -101,6 +101,31 @@ function buildLegacyNote(memoryNotes: MemoryNoteItem[]) {
     .map((item) => item.text.trim())
     .filter(Boolean)
     .join("\n");
+}
+
+function sanitizeMemoryNotesForSubmit(
+  memoryNotes: MemoryNoteItem[],
+  fallbackDate: string,
+): MemoryNoteItem[] {
+  return memoryNotes
+    .filter((item) => item && typeof item.text === "string")
+    .map((item) => {
+      const nextItem: MemoryNoteItem = {
+        id: item.id || createMemoryNoteId(),
+        noteDate: item.noteDate || fallbackDate,
+        text: item.text.trim(),
+        authorName: item.authorName || "未命名",
+        authorDeviceId: item.authorDeviceId || "",
+        createdAt: item.createdAt || new Date().toISOString(),
+      };
+
+      if (item.updatedAt) {
+        nextItem.updatedAt = item.updatedAt;
+      }
+
+      return nextItem;
+    })
+    .filter((item) => item.text.length > 0);
 }
 
 function canEditMemoryNote(note: MemoryNoteItem, currentDeviceId: string) {
@@ -495,19 +520,22 @@ export function VisitFormModal({
 
     const now = new Date().toISOString();
     const trimmedNewNoteText = newNoteText.trim();
-    const nextMemoryNotes = trimmedNewNoteText
-      ? [
-          ...memoryNotes,
-          {
-            id: createMemoryNoteId(),
-            noteDate: visitDate,
-            text: trimmedNewNoteText,
-            authorName: currentAuthorName.trim() || "未命名",
-            authorDeviceId: currentDeviceId,
-            createdAt: now,
-          },
-        ]
-      : memoryNotes;
+    const nextMemoryNotes = sanitizeMemoryNotesForSubmit(
+      trimmedNewNoteText
+        ? [
+            ...memoryNotes,
+            {
+              id: createMemoryNoteId(),
+              noteDate: visitDate,
+              text: trimmedNewNoteText,
+              authorName: currentAuthorName.trim() || "未命名",
+              authorDeviceId: currentDeviceId,
+              createdAt: now,
+            },
+          ]
+        : memoryNotes,
+      visitDate,
+    );
 
     setIsSaving(true);
 
@@ -562,27 +590,135 @@ export function VisitFormModal({
 
         <div className="flex-1 overflow-y-auto px-4 py-4">
           <div className="space-y-4">
-            <label className="block text-sm">
-              <span className="mb-1 block font-semibold text-slate-800">
-                拜訪日期
-              </span>
+            <section className="rounded-2xl border border-orange-100 bg-orange-50/60 p-3">
+              <div className="mb-3">
+                <div className="text-sm font-black text-slate-900">共同設定</div>
+                <p className="mt-1 text-xs leading-5 text-slate-500">
+                  日期、喜歡程度與照片屬於這筆回憶的共同資料，同群組成員皆可協助整理。
+                </p>
+              </div>
 
-              <input
-                type="date"
-                value={visitDate}
-                max={todayText()}
-                onChange={(event) => setVisitDate(event.target.value)}
-                className="w-full rounded-xl border border-slate-300 px-3 py-2"
-              />
+              <div className="space-y-4 rounded-2xl bg-white p-3 shadow-sm">
+                <label className="block text-sm">
+                  <span className="mb-1 block font-semibold text-slate-800">
+                    拜訪日期
+                  </span>
 
-              <p className="mt-1 text-xs text-slate-500">
-                只能記錄今天以前已發生的回憶
-              </p>
-            </label>
+                  <input
+                    type="date"
+                    value={visitDate}
+                    max={todayText()}
+                    onChange={(event) => setVisitDate(event.target.value)}
+                    className="w-full rounded-xl border border-slate-300 px-3 py-2"
+                  />
 
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
-              <div className="mb-2 text-sm font-bold text-slate-800">
-                這次的回憶留言
+                  <p className="mt-1 text-xs text-slate-500">
+                    只能記錄今天以前已發生的回憶
+                  </p>
+                </label>
+
+                <label className="block text-sm">
+                  <span className="mb-1 block font-semibold text-slate-800">
+                    這次喜歡程度
+                  </span>
+
+                  <select
+                    value={rating}
+                    onChange={(event) => setRating(Number(event.target.value))}
+                    className="w-full rounded-xl border border-slate-300 px-3 py-2"
+                  >
+                    {RATING_OPTIONS.map((option) => (
+                      <option key={option} value={option}>
+                        {option} - {RATING_LABELS[option]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <div>
+                  <span className="mb-1 block text-sm font-semibold text-slate-800">
+                    回憶照片
+                  </span>
+
+                  <label className="flex cursor-pointer items-center justify-center rounded-2xl border-2 border-dashed border-orange-300 bg-orange-50 px-4 py-6 text-center hover:bg-orange-100">
+                    <div>
+                      <div className="text-3xl">📸</div>
+
+                      <div className="mt-2 text-sm font-bold text-orange-600">
+                        {isUploading
+                          ? uploadStatus.message || "照片上傳中..."
+                          : "新增回憶照片"}
+                      </div>
+
+                      <div className="mt-1 text-xs text-slate-500">
+                        最多 {MAX_PHOTOS} 張
+                      </div>
+
+                      {uploadStatus.stage !== "idle" ? (
+                        <div className="mt-3 w-44">
+                          <div className="h-2 overflow-hidden rounded-full bg-orange-100">
+                            <div
+                              className="h-full rounded-full bg-orange-500 transition-all duration-200"
+                              style={{ width: `${uploadStatus.progress}%` }}
+                            />
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      disabled={isUploading}
+                      onChange={(event) => {
+                        handlePhotoUpload(event.target.files);
+                        event.target.value = "";
+                      }}
+                      className="hidden"
+                    />
+                  </label>
+
+                  {photos.length > 0 ? (
+                    <div className="mt-3 grid grid-cols-4 gap-2">
+                      {previewPhotos.map((photo, index) => (
+                        <div
+                          key={`${photo}-${index}`}
+                          className="relative overflow-hidden rounded-xl"
+                        >
+                          <img
+                            src={photo}
+                            alt={`visit-photo-${index + 1}`}
+                            className="h-24 w-full object-cover"
+                          />
+
+                          <button
+                            type="button"
+                            onClick={() => handleRemovePhoto(photo)}
+                            className="absolute right-1 top-1 rounded-full bg-black/60 px-1.5 py-0.5 text-[10px] font-bold text-white"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ))}
+
+                      {remainPhotoCount > 0 ? (
+                        <div className="flex h-24 items-center justify-center rounded-xl bg-slate-200 text-lg font-bold text-slate-700">
+                          +{remainPhotoCount}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+              <div className="mb-3">
+                <div className="text-sm font-black text-slate-900">共同回憶留言板</div>
+                <p className="mt-1 text-xs leading-5 text-slate-500">
+                  每個人可以留下自己的回憶文字；自己的文字可編輯或刪除，其他人的文字僅能查看。
+                </p>
               </div>
 
               {memoryNotes.length > 0 ? (
@@ -690,101 +826,7 @@ export function VisitFormModal({
                   先加入留言清單
                 </button>
               ) : null}
-            </div>
-
-            <label className="block text-sm">
-              <span className="mb-1 block font-semibold text-slate-800">
-                這次喜歡程度
-              </span>
-
-              <select
-                value={rating}
-                onChange={(event) => setRating(Number(event.target.value))}
-                className="w-full rounded-xl border border-slate-300 px-3 py-2"
-              >
-                {RATING_OPTIONS.map((option) => (
-                  <option key={option} value={option}>
-                    {option} - {RATING_LABELS[option]}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <div>
-              <span className="mb-1 block text-sm font-semibold text-slate-800">
-                回憶照片
-              </span>
-
-              <label className="flex cursor-pointer items-center justify-center rounded-2xl border-2 border-dashed border-orange-300 bg-orange-50 px-4 py-6 text-center hover:bg-orange-100">
-                <div>
-                  <div className="text-3xl">📸</div>
-
-                  <div className="mt-2 text-sm font-bold text-orange-600">
-                    {isUploading
-                      ? uploadStatus.message || "照片上傳中..."
-                      : "新增回憶照片"}
-                  </div>
-
-                  <div className="mt-1 text-xs text-slate-500">
-                    最多 {MAX_PHOTOS} 張
-                  </div>
-
-                  {uploadStatus.stage !== "idle" ? (
-                    <div className="mt-3 w-44">
-                      <div className="h-2 overflow-hidden rounded-full bg-orange-100">
-                        <div
-                          className="h-full rounded-full bg-orange-500 transition-all duration-200"
-                          style={{ width: `${uploadStatus.progress}%` }}
-                        />
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-
-                <input
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  disabled={isUploading}
-                  onChange={(event) => {
-                    handlePhotoUpload(event.target.files);
-                    event.target.value = "";
-                  }}
-                  className="hidden"
-                />
-              </label>
-
-              {photos.length > 0 ? (
-                <div className="mt-3 grid grid-cols-4 gap-2">
-                  {previewPhotos.map((photo, index) => (
-                    <div
-                      key={`${photo}-${index}`}
-                      className="relative overflow-hidden rounded-xl"
-                    >
-                      <img
-                        src={photo}
-                        alt={`visit-photo-${index + 1}`}
-                        className="h-24 w-full object-cover"
-                      />
-
-                      <button
-                        type="button"
-                        onClick={() => handleRemovePhoto(photo)}
-                        className="absolute right-1 top-1 rounded-full bg-black/60 px-1.5 py-0.5 text-[10px] font-bold text-white"
-                      >
-                        ✕
-                      </button>
-                    </div>
-                  ))}
-
-                  {remainPhotoCount > 0 ? (
-                    <div className="flex h-24 items-center justify-center rounded-xl bg-slate-200 text-lg font-bold text-slate-700">
-                      +{remainPhotoCount}
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-            </div>
+            </section>
           </div>
         </div>
 

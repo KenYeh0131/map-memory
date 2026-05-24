@@ -270,11 +270,33 @@ function getVisitDates(visits: VisitItem[]) {
     .sort();
 }
 
+function removeUndefinedDeep<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => removeUndefinedDeep(item))
+      .filter((item) => item !== undefined) as T;
+  }
+
+  if (value && typeof value === "object") {
+    const nextValue: Record<string, unknown> = {};
+
+    Object.entries(value as Record<string, unknown>).forEach(([key, item]) => {
+      if (item === undefined) return;
+      nextValue[key] = removeUndefinedDeep(item);
+    });
+
+    return nextValue as T;
+  }
+
+  return value;
+}
+
 function buildVisitSummaryUpdate(visits: VisitItem[]) {
-  const sortedDates = getVisitDates(visits);
+  const safeVisits = removeUndefinedDeep(visits);
+  const sortedDates = getVisitDates(safeVisits);
   const updateData: Record<string, unknown> = {
-    visits,
-    visitCount: visits.length,
+    visits: safeVisits,
+    visitCount: safeVisits.length,
     updatedAt: new Date().toISOString(),
   };
 
