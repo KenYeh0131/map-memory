@@ -59,7 +59,19 @@ export type PlaceItem = {
   coverPhotoIndex?: number;
   completedDate?: string;
   tags: string[];
+  /**
+   * 地點參考網址，供「查看地點」按鈕開啟部落格、官網或介紹頁。
+   */
+  placeUrl?: string;
+  /**
+   * 導航目標名稱。只填名稱時交給 Google Maps 搜尋。
+   */
   navigationTarget: string;
+  /**
+   * 導航目標座標。若 lat/lng 都存在，優先導航到座標。
+   */
+  navigationTargetLat?: number;
+  navigationTargetLng?: number;
   notes: string;
   lat?: number;
   lng?: number;
@@ -122,7 +134,10 @@ export const defaultPlacesSeed: PlaceItem[] = [
     rating: 4,
     photos: [],
     tags: ["海景", "散步"],
+    placeUrl: "",
     navigationTarget: "淡水漁人碼頭",
+    navigationTargetLat: undefined,
+    navigationTargetLng: undefined,
     notes: "傍晚去看夕陽，拍照應該很棒。",
     lat: 25.1826,
     lng: 121.4104,

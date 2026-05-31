@@ -1,6 +1,39 @@
 "use client";
 
-import type { JoinRequest } from "@/app/page";
+import { useEffect, useMemo, useState } from "react";
+import type { GroupMember, JoinRequest } from "@/app/page";
+
+
+const MEMBER_NOTES_STORAGE_KEY = "map-memory-member-notes-v1";
+
+type MemberNotesMap = Record<string, string>;
+
+function buildMemberNoteKey(groupId: string, deviceId: string) {
+  return `${groupId}__${deviceId}`;
+}
+
+function loadMemberNotes(): MemberNotesMap {
+  if (typeof window === "undefined") return {};
+
+  try {
+    const raw = window.localStorage.getItem(MEMBER_NOTES_STORAGE_KEY);
+    if (!raw) return {};
+
+    const parsed = JSON.parse(raw) as MemberNotesMap;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function getDisplayMemberName(member: GroupMember, note: string) {
+  const nickname = member.nickname || "未命名";
+  const trimmedNote = note.trim();
+
+  if (!trimmedNote) return nickname;
+
+  return `${trimmedNote}（${nickname}）`;
+}
 
 type SettingsViewProps = {
   availableTags: string[];
@@ -13,6 +46,8 @@ type SettingsViewProps = {
   newGroupName: string;
   joinInviteCode: string;
   joinRequests: JoinRequest[];
+  groupMembers: GroupMember[];
+  currentGroupId: string;
   isCreatingGroup: boolean;
   isRequestingJoin: boolean;
   isApprovingRequestId: string | null;
@@ -41,6 +76,8 @@ export function SettingsView({
   newGroupName,
   joinInviteCode,
   joinRequests,
+  groupMembers,
+  currentGroupId,
   isCreatingGroup,
   isRequestingJoin,
   isApprovingRequestId,
@@ -65,6 +102,34 @@ export function SettingsView({
     isLeavingGroup ||
     isDeletingGroup;
 
+  const [memberNotes, setMemberNotes] = useState<MemberNotesMap>(() =>
+    loadMemberNotes(),
+  );
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(
+      MEMBER_NOTES_STORAGE_KEY,
+      JSON.stringify(memberNotes),
+    );
+  }, [memberNotes]);
+
+  const visibleMembers = useMemo(() => {
+    return [...groupMembers].sort((a, b) => {
+      if (a.role !== b.role) return a.role === "owner" ? -1 : 1;
+      return a.nickname.localeCompare(b.nickname);
+    });
+  }, [groupMembers]);
+
+  const updateMemberNote = (member: GroupMember, note: string) => {
+    const key = buildMemberNoteKey(currentGroupId, member.deviceId);
+
+    setMemberNotes((prev) => ({
+      ...prev,
+      [key]: note,
+    }));
+  };
+
   return (
     <section className="space-y-4">
       <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -79,6 +144,60 @@ export function SettingsView({
           className="mt-3 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-orange-400"
           disabled={isBusy}
         />
+      </div>
+
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="mb-2 flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-slate-900">群組成員</h3>
+          <span className="text-xs font-medium text-slate-500">
+            {visibleMembers.length} 人
+          </span>
+        </div>
+        <p className="mt-1 text-xs text-slate-500">
+          可幫成員加上只有自己看得到的備註，避免認不出對方自訂暱稱。
+        </p>
+
+        {visibleMembers.length === 0 ? (
+          <div className="mt-3 rounded-xl bg-slate-50 px-3 py-3 text-sm text-slate-400">
+            目前沒有可顯示的成員
+          </div>
+        ) : (
+          <div className="mt-3 space-y-3">
+            {visibleMembers.map((member) => {
+              const noteKey = buildMemberNoteKey(currentGroupId, member.deviceId);
+              const note = memberNotes[noteKey] ?? "";
+              const displayName = getDisplayMemberName(member, note);
+
+              return (
+                <div
+                  key={member.deviceId}
+                  className="rounded-xl border border-slate-200 bg-slate-50 p-3"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-bold text-slate-900">
+                        {member.role === "owner" ? "👑 " : "👤 "}
+                        {displayName}
+                      </div>
+                      <div className="mt-1 text-xs text-slate-500">
+                        {member.role === "owner" ? "群主" : "成員"}
+                        {note.trim() ? ` · 原名：${member.nickname}` : ""}
+                      </div>
+                    </div>
+                  </div>
+
+                  <input
+                    value={note}
+                    onChange={(event) => updateMemberNote(member, event.target.value)}
+                    placeholder="我的備註，例如：老婆、大兒子、同事"
+                    className="mt-3 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-orange-400"
+                    disabled={isBusy}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">

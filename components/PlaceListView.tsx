@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
-import { openGoogleMapsDirections } from "@/lib/navigation";
 import { PlaceCard } from "@/components/PlaceCard";
 import type { BestTimingItem, PlaceItem, PlaceStatus } from "@/lib/places";
 
@@ -55,6 +54,54 @@ type TimingDisplayInfo = {
 const RATING_CHIPS = [0, 1, 2, 3, 4, 5] as const;
 const TIMELINE_PHOTO_LIMIT = 2;
 
+
+
+function buildDirectionsUrl(place: PlaceItem) {
+  if (
+    typeof place.navigationTargetLat === "number" &&
+    Number.isFinite(place.navigationTargetLat) &&
+    typeof place.navigationTargetLng === "number" &&
+    Number.isFinite(place.navigationTargetLng)
+  ) {
+    return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
+      `${place.navigationTargetLat},${place.navigationTargetLng}`,
+    )}`;
+  }
+
+  if (place.navigationTarget?.trim()) {
+    return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
+      place.navigationTarget.trim(),
+    )}`;
+  }
+
+  if (
+    typeof place.lat === "number" &&
+    Number.isFinite(place.lat) &&
+    typeof place.lng === "number" &&
+    Number.isFinite(place.lng)
+  ) {
+    return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
+      `${place.lat},${place.lng}`,
+    )}`;
+  }
+
+  if (place.address?.trim()) {
+    return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
+      place.address.trim(),
+    )}`;
+  }
+
+  return "";
+}
+
+function openSmartGoogleMapsDirections(place: PlaceItem) {
+  const url = buildDirectionsUrl(place);
+
+  if (!url) return false;
+
+  window.open(url, "_blank", "noopener,noreferrer");
+  return true;
+}
 
 function formatDate(dateText?: string) {
   if (!dateText) return "";
@@ -430,7 +477,7 @@ export function PlaceListView({
   );
 
   const handleStartNavigation = useCallback((place: PlaceItem) => {
-    const ok = openGoogleMapsDirections(place);
+    const ok = openSmartGoogleMapsDirections(place);
 
     if (!ok) {
       alert("未設定導航資訊");

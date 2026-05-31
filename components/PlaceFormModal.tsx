@@ -25,7 +25,10 @@ export type PlaceFormValues = {
   lat?: number;
   lng?: number;
   tagsText: string;
+  placeUrl: string;
   navigationTarget: string;
+  navigationTargetLat?: number;
+  navigationTargetLng?: number;
   notes: string;
   bestTimings: BestTimingItem[];
 };
@@ -48,7 +51,7 @@ const inputClassName =
   "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 opacity-100 placeholder:text-slate-500";
 
 const labelTitleClassName = "mb-1 block font-semibold text-slate-800";
-const PLACE_PHOTO_LIMIT = 1;
+const PLACE_PHOTO_LIMIT = 3;
 const AUTOCOMPLETE_MIN_LENGTH = 4;
 const AUTOCOMPLETE_DEBOUNCE_MS = 400;
 const PLACE_CACHE_STORAGE_KEY = "map-memory-place-autocomplete-cache-v1";
@@ -218,6 +221,23 @@ function uploadFileWithProgress(
 }
 
 
+
+function parseCoordinateText(text: string) {
+  const match = text
+    .trim()
+    .match(/^(-?\d+(?:\.\d+)?)\s*[,，\s]\s*(-?\d+(?:\.\d+)?)$/);
+
+  if (!match) return null;
+
+  const lat = Number(match[1]);
+  const lng = Number(match[2]);
+
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
+
+  return { lat, lng };
+}
+
 function parseTags(tagsText: string) {
   return tagsText
     .split(",")
@@ -317,7 +337,10 @@ function buildInitialValues(initialPlace: PlaceItem | null): PlaceFormValues {
     lat: initialPlace?.lat,
     lng: initialPlace?.lng,
     tagsText: initialPlace?.tags.join(", ") ?? "",
+    placeUrl: initialPlace?.placeUrl ?? "",
     navigationTarget: initialPlace?.navigationTarget ?? "",
+    navigationTargetLat: initialPlace?.navigationTargetLat,
+    navigationTargetLng: initialPlace?.navigationTargetLng,
     notes: initialPlace?.notes ?? "",
     bestTimings: migrateOldBestTiming(initialPlace),
   };
@@ -632,8 +655,22 @@ export function PlaceFormModal({
             formValues.photos.length - 1,
           );
 
+    const parsedNavigationCoordinates = parseCoordinateText(
+      formValues.navigationTarget,
+    );
+
     await onSubmit({
       ...formValues,
+      navigationTargetLat:
+        typeof formValues.navigationTargetLat === "number" &&
+        Number.isFinite(formValues.navigationTargetLat)
+          ? formValues.navigationTargetLat
+          : parsedNavigationCoordinates?.lat,
+      navigationTargetLng:
+        typeof formValues.navigationTargetLng === "number" &&
+        Number.isFinite(formValues.navigationTargetLng)
+          ? formValues.navigationTargetLng
+          : parsedNavigationCoordinates?.lng,
       coverPhotoIndex: safeCoverPhotoIndex,
       status: "wantToGo",
       completedDate: "",
@@ -644,86 +681,142 @@ export function PlaceFormModal({
   const handlePhotoUpload = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
 
-    if (formValues.photos.length >= PLACE_PHOTO_LIMIT) {
-      window.alert("地點照片最多 1 張，請先刪除原本照片再重新上傳");
+    const remainingSlots = PLACE_PHOTO_LIMIT - formValues.photos.length;
+
+    if (remainingSlots <= 0) {
+      window.alert("地點照片最多 3 張，請先刪除原本照片再重新上傳");
       return;
     }
 
-    const selectedFile = Array.from(files)[0];
-    const localPreviewUrl = URL.createObjectURL(selectedFile);
+    const selectedFiles = Array.from(files).slice(0, remainingSlots);
+
+    if (files.length > remainingSlots) {
+      window.alert(`地點照片最多 3 張，本次只會上傳前 ${remainingSlots} 張`);
+    }
 
     setIsUploadingPhoto(true);
+
+    const localPreviewUrls = selectedFiles.map((file) => URL.createObjectURL(file));
+    const previewStartIndex = formValues.photos.length;
+
     setUploadStatus({
       stage: "preview",
       progress: 5,
-      message: "建立照片預覽中...",
+      message:
+        selectedFiles.length > 1
+          ? `建立 ${selectedFiles.length} 張照片預覽中...`
+          : "建立照片預覽中...",
     });
 
     setFormValues((prev) => ({
       ...prev,
-      photos: [localPreviewUrl],
-      coverPhotoIndex: 0,
+      photos: [...prev.photos, ...localPreviewUrls].slice(0, PLACE_PHOTO_LIMIT),
+      coverPhotoIndex: prev.photos.length === 0 ? 0 : prev.coverPhotoIndex,
     }));
 
     try {
-      await new Promise((resolve) => window.setTimeout(resolve, 0));
+      const uploadedUrls: string[] = [];
 
-      setUploadStatus({
-        stage: "compressing",
-        progress: 15,
-        message: "照片壓縮中...",
+      for (let index = 0; index < selectedFiles.length; index += 1) {
+        const file = selectedFiles[index];
+        const currentNo = index + 1;
+        const total = selectedFiles.length;
+
+        await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+        setUploadStatus({
+          stage: "compressing",
+          progress: Math.round((index / total) * 100),
+          message:
+            total > 1
+              ? `第 ${currentNo}/${total} 張照片壓縮中...`
+              : "照片壓縮中...",
+        });
+
+        const compressedFile = await compressImage(file);
+
+        setUploadStatus({
+          stage: "uploading",
+          progress: Math.max(10, Math.round((index / total) * 100)),
+          message:
+            total > 1
+              ? `第 ${currentNo}/${total} 張照片上傳中...`
+              : "照片上傳中...",
+        });
+
+        const downloadUrl = await uploadFileWithProgress(
+          compressedFile,
+          "places",
+          (progress) => {
+            const baseProgress = (index / total) * 100;
+            const currentProgress = progress / total;
+            const totalProgress = Math.min(99, Math.round(baseProgress + currentProgress));
+
+            setUploadStatus({
+              stage: "uploading",
+              progress: totalProgress,
+              message:
+                total > 1
+                  ? `第 ${currentNo}/${total} 張照片上傳中... ${progress}%`
+                  : `照片上傳中... ${progress}%`,
+            });
+          },
+        );
+
+        uploadedUrls.push(downloadUrl);
+      }
+
+      setFormValues((prev) => {
+        const nextPhotos = [...prev.photos];
+
+        uploadedUrls.forEach((downloadUrl, index) => {
+          const targetIndex = previewStartIndex + index;
+          if (targetIndex < PLACE_PHOTO_LIMIT) {
+            nextPhotos[targetIndex] = downloadUrl;
+          }
+        });
+
+        return {
+          ...prev,
+          photos: nextPhotos.slice(0, PLACE_PHOTO_LIMIT),
+          coverPhotoIndex: previewStartIndex === 0 ? 0 : prev.coverPhotoIndex,
+        };
       });
-
-      const compressedFile = await compressImage(selectedFile);
-
-      setUploadStatus({
-        stage: "uploading",
-        progress: 25,
-        message: "照片上傳中...",
-      });
-
-      const downloadUrl = await uploadFileWithProgress(
-        compressedFile,
-        "places",
-        (progress) => {
-          setUploadStatus({
-            stage: "uploading",
-            progress: Math.max(25, progress),
-            message: `照片上傳中... ${progress}%`,
-          });
-        },
-      );
-
-      setFormValues((prev) => ({
-        ...prev,
-        photos: [downloadUrl],
-        coverPhotoIndex: 0,
-      }));
 
       setUploadStatus({
         stage: "done",
         progress: 100,
-        message: "照片上傳完成",
+        message:
+          selectedFiles.length > 1
+            ? `${selectedFiles.length} 張照片上傳完成`
+            : "照片上傳完成",
       });
     } catch (error) {
       console.error(error);
-      URL.revokeObjectURL(localPreviewUrl);
+
+      localPreviewUrls.forEach((url) => URL.revokeObjectURL(url));
+
       setFormValues((prev) => ({
         ...prev,
-        photos: [],
-        coverPhotoIndex: 0,
+        photos: prev.photos.filter((photo) => !localPreviewUrls.includes(photo)),
+        coverPhotoIndex: Math.min(
+          prev.coverPhotoIndex,
+          Math.max(prev.photos.length - localPreviewUrls.length - 1, 0),
+        ),
       }));
+
       setUploadStatus({
         stage: "error",
         progress: 0,
         message: "照片上傳失敗，請重新上傳",
       });
+
       window.alert("照片上傳失敗，請稍後再試");
     } finally {
       setIsUploadingPhoto(false);
 
       window.setTimeout(() => {
-        URL.revokeObjectURL(localPreviewUrl);
+        localPreviewUrls.forEach((url) => URL.revokeObjectURL(url));
         setUploadStatus(idleUploadStatus);
       }, 1200);
     }
@@ -1076,7 +1169,7 @@ export function PlaceFormModal({
             </div>
 
             <div className="block text-sm">
-              <span className={labelTitleClassName}>地點照片（最多 1 張）</span>
+              <span className={labelTitleClassName}>地點照片（最多 3 張）</span>
 
               <label
                 className={`inline-flex cursor-pointer items-center justify-center rounded-lg px-4 py-2 text-sm font-bold text-white ${
@@ -1090,6 +1183,7 @@ export function PlaceFormModal({
                 <input
                   type="file"
                   accept="image/*"
+                  multiple
                   disabled={
                     isUploadingPhoto ||
                     formValues.photos.length >= PLACE_PHOTO_LIMIT
@@ -1109,7 +1203,7 @@ export function PlaceFormModal({
                 <p className="text-xs font-medium text-slate-600">
                   {uploadStatus.stage !== "idle"
                     ? uploadStatus.message
-                    : `已上傳 ${formValues.photos.length}/1`}
+                    : `已上傳 ${formValues.photos.length}/3`}
                 </p>
 
                 {uploadStatus.stage !== "idle" ? (
@@ -1169,8 +1263,18 @@ export function PlaceFormModal({
                           </button>
                         </div>
 
-                        <div className="bg-white px-2 py-1.5 text-center text-[11px] font-semibold text-slate-600">
-                          地點封面照片
+                        <div className="flex items-center justify-between bg-white px-2 py-1.5 text-[11px] font-semibold text-slate-600">
+                          <span>{isCover ? "地點封面照片" : `地點照片 ${index + 1}`}</span>
+
+                          {!isCover ? (
+                            <button
+                              type="button"
+                              onClick={() => handleChange("coverPhotoIndex", index)}
+                              className="rounded-full bg-orange-50 px-2 py-0.5 text-orange-600"
+                            >
+                              設為封面
+                            </button>
+                          ) : null}
                         </div>
                       </div>
                     );
@@ -1242,16 +1346,41 @@ export function PlaceFormModal({
             </div>
 
             <label className="block text-sm">
+              <span className={labelTitleClassName}>查看地點網址</span>
+
+              <input
+                value={formValues.placeUrl}
+                onChange={(event) =>
+                  handleChange("placeUrl", event.target.value)
+                }
+                placeholder="貼上部落格、官網、Google Map 或介紹頁網址"
+                className={inputClassName}
+              />
+            </label>
+
+            <label className="block text-sm">
               <span className={labelTitleClassName}>導航目標</span>
 
               <input
                 value={formValues.navigationTarget}
-                onChange={(event) =>
-                  handleChange("navigationTarget", event.target.value)
-                }
-                placeholder="輸入導航目標，例如：漁人碼頭"
+                onChange={(event) => {
+                  const nextValue = event.target.value;
+                  const parsedCoordinates = parseCoordinateText(nextValue);
+
+                  setFormValues((prev) => ({
+                    ...prev,
+                    navigationTarget: nextValue,
+                    navigationTargetLat: parsedCoordinates?.lat,
+                    navigationTargetLng: parsedCoordinates?.lng,
+                  }));
+                }}
+                placeholder="可輸入地點名稱，或經緯度：24.12345,121.54321"
                 className={inputClassName}
               />
+
+              <span className="mt-1 block text-xs text-slate-500">
+                輸入地點文字時交給 Google Maps 搜尋；輸入經緯度時會直接導航到座標。
+              </span>
             </label>
 
             <label className="block text-sm">

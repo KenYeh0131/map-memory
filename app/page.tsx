@@ -49,6 +49,13 @@ export type JoinRequest = {
   reviewedAt?: string;
 };
 
+export type GroupMember = {
+  deviceId: string;
+  nickname: string;
+  role: "owner" | "member";
+  joinedAt?: string;
+};
+
 type VisitItem = NonNullable<PlaceItem["visits"]>[number];
 
 const FALLBACK_GROUPS: MapGroup[] = [];
@@ -59,7 +66,7 @@ const JOINED_GROUPS_STORAGE_KEY = "map-memory-joined-groups-v1";
 const DEVICE_ID_STORAGE_KEY = "map-memory-device-id-v1";
 const NICKNAME_STORAGE_KEY = "map-memory-nickname-v1";
 
-const PHOTO_LIMIT = 10;
+const PHOTO_LIMIT = 3;
 
 const defaultFilters: PlaceFilters = {
   keyword: "",
@@ -144,7 +151,10 @@ function normalizePlace(id: string, data: Partial<PlaceItem>): PlaceItem {
     photos: Array.isArray(data.photos) ? data.photos : [],
     coverPhotoIndex: data.coverPhotoIndex ?? 0,
     tags: Array.isArray(data.tags) ? data.tags : [],
+    placeUrl: typeof data.placeUrl === "string" ? data.placeUrl : "",
     navigationTarget: data.navigationTarget ?? "",
+    navigationTargetLat: typeof data.navigationTargetLat === "number" ? data.navigationTargetLat : undefined,
+    navigationTargetLng: typeof data.navigationTargetLng === "number" ? data.navigationTargetLng : undefined,
     notes: data.notes ?? "",
     lat: data.lat,
     lng: data.lng,
@@ -324,6 +334,7 @@ export default function Home() {
   const [newGroupName, setNewGroupName] = useState("");
   const [joinInviteCode, setJoinInviteCode] = useState("");
   const [joinRequests, setJoinRequests] = useState<JoinRequest[]>([]);
+  const [groupMembers, setGroupMembers] = useState<GroupMember[]>([]);
   const [selectedDeleteTags, setSelectedDeleteTags] = useState<string[]>([]);
   const [isJoinRequestPopupOpen, setIsJoinRequestPopupOpen] = useState(false);
   const [isCreatingGroup, setIsCreatingGroup] = useState(false);
@@ -543,37 +554,78 @@ export default function Home() {
     );
 
     const unsubscribe = onSnapshot(requestsQuery, (snapshot) => {
-      const nextRequests = snapshot.docs
-        .map((documentSnapshot) => {
-          const data = documentSnapshot.data();
+      const allRequests = snapshot.docs.map((documentSnapshot) => {
+        const data = documentSnapshot.data();
 
-          return {
-            id: documentSnapshot.id,
-            nickname:
-              typeof data.nickname === "string" ? data.nickname : "未命名",
-            deviceId:
-              typeof data.deviceId === "string" ? data.deviceId : "unknown",
-            status:
-              data.status === "approved" || data.status === "rejected"
-                ? data.status
-                : "pending",
-            createdAt:
-              typeof data.createdAt === "string"
-                ? data.createdAt
-                : new Date().toISOString(),
-            updatedAt:
-              typeof data.updatedAt === "string" ? data.updatedAt : undefined,
-            reviewedAt:
-              typeof data.reviewedAt === "string" ? data.reviewedAt : undefined,
-          } satisfies JoinRequest;
-        })
-        .filter((request) => request.status === "pending");
+        return {
+          id: documentSnapshot.id,
+          nickname:
+            typeof data.nickname === "string" ? data.nickname : "未命名",
+          deviceId:
+            typeof data.deviceId === "string" ? data.deviceId : "unknown",
+          status:
+            data.status === "approved" || data.status === "rejected"
+              ? data.status
+              : "pending",
+          createdAt:
+            typeof data.createdAt === "string"
+              ? data.createdAt
+              : new Date().toISOString(),
+          updatedAt:
+            typeof data.updatedAt === "string" ? data.updatedAt : undefined,
+          reviewedAt:
+            typeof data.reviewedAt === "string" ? data.reviewedAt : undefined,
+        } satisfies JoinRequest;
+      });
 
-      setJoinRequests(nextRequests);
+      setJoinRequests(allRequests.filter((request) => request.status === "pending"));
+
+      const membersMap = new Map<string, GroupMember>();
+
+      if (currentGroup?.ownerDeviceId) {
+        membersMap.set(currentGroup.ownerDeviceId, {
+          deviceId: currentGroup.ownerDeviceId,
+          nickname:
+            currentGroup.ownerDeviceId === deviceId
+              ? nickname.trim() || "我"
+              : "群主",
+          role: "owner",
+        });
+      }
+
+      allRequests
+        .filter((request) => request.status === "approved")
+        .forEach((request) => {
+          if (!request.deviceId || request.deviceId === "unknown") return;
+
+          const isOwner = request.deviceId === currentGroup?.ownerDeviceId;
+
+          membersMap.set(request.deviceId, {
+            deviceId: request.deviceId,
+            nickname: request.nickname || "未命名",
+            role: isOwner ? "owner" : "member",
+            joinedAt: request.reviewedAt || request.updatedAt || request.createdAt,
+          });
+        });
+
+      if (deviceId && !membersMap.has(deviceId)) {
+        membersMap.set(deviceId, {
+          deviceId,
+          nickname: nickname.trim() || "我",
+          role: currentGroup?.ownerDeviceId === deviceId ? "owner" : "member",
+        });
+      }
+
+      const nextMembers = Array.from(membersMap.values()).sort((a, b) => {
+        if (a.role !== b.role) return a.role === "owner" ? -1 : 1;
+        return a.nickname.localeCompare(b.nickname);
+      });
+
+      setGroupMembers(nextMembers);
     });
 
     return () => unsubscribe();
-  }, [joinRequestsCollectionRef]);
+  }, [currentGroup?.ownerDeviceId, deviceId, joinRequestsCollectionRef, nickname]);
 
   useEffect(() => {
     const placesQuery = query(
@@ -1022,7 +1074,16 @@ export default function Home() {
           photos: values.photos.slice(0, PHOTO_LIMIT),
           coverPhotoIndex: values.coverPhotoIndex ?? 0,
           tags: normalizeTags(values.tagsText),
+          placeUrl: values.placeUrl.trim(),
           navigationTarget: values.navigationTarget.trim(),
+          ...(typeof values.navigationTargetLat === "number" &&
+          Number.isFinite(values.navigationTargetLat)
+            ? { navigationTargetLat: values.navigationTargetLat }
+            : {}),
+          ...(typeof values.navigationTargetLng === "number" &&
+          Number.isFinite(values.navigationTargetLng)
+            ? { navigationTargetLng: values.navigationTargetLng }
+            : {}),
           notes: values.notes.trim(),
           lat: values.lat ?? 25.052013567893294,
           lng: values.lng ?? 121.36444898053523,
@@ -1040,7 +1101,7 @@ export default function Home() {
 
         setSelectedPlaceId(placeId);
       } else if (editingPlace) {
-        const updatedPlace: Partial<PlaceItem> = {
+        const updatedPlace: Record<string, unknown> = {
           name: values.name.trim(),
           status: values.status,
           address: values.address.trim(),
@@ -1048,7 +1109,18 @@ export default function Home() {
           photos: values.photos.slice(0, PHOTO_LIMIT),
           coverPhotoIndex: values.coverPhotoIndex ?? 0,
           tags: normalizeTags(values.tagsText),
+          placeUrl: values.placeUrl.trim(),
           navigationTarget: values.navigationTarget.trim(),
+          navigationTargetLat:
+            typeof values.navigationTargetLat === "number" &&
+            Number.isFinite(values.navigationTargetLat)
+              ? values.navigationTargetLat
+              : deleteField(),
+          navigationTargetLng:
+            typeof values.navigationTargetLng === "number" &&
+            Number.isFinite(values.navigationTargetLng)
+              ? values.navigationTargetLng
+              : deleteField(),
           notes: values.notes.trim(),
           lat: values.lat ?? editingPlace.lat,
           lng: values.lng ?? editingPlace.lng,
@@ -1136,8 +1208,14 @@ export default function Home() {
       const nextVisits = [nextVisit, ...currentVisits];
       const updatedPlace = buildVisitSummaryUpdate(nextVisits);
 
-      if (visitTargetPlace.status === "wantToGo") {
-        updatedPlace.status = "wantToReturn";
+      const isFirstVisit =
+       (visitTargetPlace.rating ?? 0) === 0 &&
+       (visitTargetPlace.visitCount ?? 0) === 0;
+
+      if (isFirstVisit) {
+        Object.assign(updatedPlace, {
+          rating: values.rating ?? 0,
+        });
       }
 
       await updateDoc(
@@ -1335,7 +1413,10 @@ export default function Home() {
       coverPhotoIndex: place.coverPhotoIndex ?? 0,
       completedDate: "",
       tags: Array.isArray(place.tags) ? [...place.tags] : [],
+      placeUrl: place.placeUrl ?? "",
       navigationTarget: place.navigationTarget ?? "",
+      ...(typeof place.navigationTargetLat === "number" ? { navigationTargetLat: place.navigationTargetLat } : {}),
+      ...(typeof place.navigationTargetLng === "number" ? { navigationTargetLng: place.navigationTargetLng } : {}),
       notes: place.notes ?? "",
       ...(typeof place.lat === "number" ? { lat: place.lat } : {}),
       ...(typeof place.lng === "number" ? { lng: place.lng } : {}),
@@ -1527,6 +1608,8 @@ export default function Home() {
           newGroupName={newGroupName}
           joinInviteCode={joinInviteCode}
           joinRequests={joinRequests}
+          groupMembers={groupMembers}
+          currentGroupId={safeCurrentGroupId}
           availableTags={availableTags}
           selectedTags={selectedDeleteTags}
           isGroupOwner={isGroupOwner}
