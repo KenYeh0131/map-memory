@@ -1,5 +1,7 @@
 "use client";
 
+import { openGoogleMapsDirections } from "@/lib/navigation";
+
 import type { MouseEvent, TouchEvent } from "react";
 import { useRef, useState } from "react";
 import type { BestTimingItem, PlaceItem } from "@/lib/places";
@@ -34,47 +36,6 @@ function normalizeExternalUrl(url?: string) {
 
 function openPlaceUrl(place: PlaceItem) {
   const url = normalizeExternalUrl(place.placeUrl);
-  if (!url) return false;
-
-  window.open(url, "_blank", "noopener,noreferrer");
-  return true;
-}
-
-function buildDirectionsUrl(place: PlaceItem) {
-  if (
-    typeof place.navigationTargetLat === "number" &&
-    Number.isFinite(place.navigationTargetLat) &&
-    typeof place.navigationTargetLng === "number" &&
-    Number.isFinite(place.navigationTargetLng)
-  ) {
-    const destination = `${place.navigationTargetLat},${place.navigationTargetLng}`;
-    return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(destination)}`;
-  }
-
-  const navigationTarget = place.navigationTarget?.trim();
-  if (navigationTarget) {
-    return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(navigationTarget)}`;
-  }
-
-  if (
-    typeof place.lat === "number" &&
-    Number.isFinite(place.lat) &&
-    typeof place.lng === "number" &&
-    Number.isFinite(place.lng)
-  ) {
-    const destination = `${place.lat},${place.lng}`;
-    return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(destination)}`;
-  }
-
-  if (place.address?.trim()) {
-    return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(place.address.trim())}`;
-  }
-
-  return "";
-}
-
-function openSmartGoogleMapsDirections(place: PlaceItem) {
-  const url = buildDirectionsUrl(place);
   if (!url) return false;
 
   window.open(url, "_blank", "noopener,noreferrer");
@@ -363,7 +324,7 @@ export function PlaceCard({
   const handleStartNavigation = (event: MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
 
-    const ok = openSmartGoogleMapsDirections(place);
+    const ok = openGoogleMapsDirections(place);
     if (!ok) window.alert("未設定導航資訊");
   };
 
@@ -459,7 +420,7 @@ export function PlaceCard({
         onTouchStart={handleTouchStart}
         onTouchEnd={handleTouchEnd}
         onContextMenu={handleContextMenu}
-        className={`relative overflow-hidden rounded-3xl bg-white shadow-2xl ${
+        className={`relative w-full overflow-hidden rounded-3xl bg-white shadow-2xl ${
           timingInfo.isActive ? "ring-4 ring-amber-300" : ""
         } ${onOpenDetail ? "cursor-pointer" : ""} ${className}`}
       >
@@ -508,7 +469,7 @@ export function PlaceCard({
         ) : null}
 
         <div className="flex items-stretch">
-          <div className="w-32 shrink-0 overflow-hidden bg-slate-100">
+          <div className="w-[28%] max-w-32 shrink-0 overflow-hidden bg-slate-100">
             {coverPhoto ? (
               <div className="relative h-full min-h-32">
                 <button
@@ -541,7 +502,7 @@ export function PlaceCard({
             )}
           </div>
 
-          <div className="flex min-w-0 flex-1 flex-col p-4">
+          <div className="flex min-w-0 flex-1 flex-col p-3">
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0 flex-1 pr-1">
                 <div className="truncate text-lg font-bold text-slate-900">
@@ -617,16 +578,16 @@ export function PlaceCard({
               <button
                 type="button"
                 onClick={handleStartNavigation}
-                className="flex-1 rounded-xl bg-blue-500 px-2 py-2.5 text-xs font-bold text-white"
-                aria-label="立刻出發"
+                className="min-w-0 flex-1 whitespace-nowrap rounded-xl bg-blue-500 px-2 py-2.5 text-xs font-bold text-white"
+                aria-label="立即出發"
               >
-                🚕 立刻出發
+                🚕 立即出發
               </button>
 
               <button
                 type="button"
                 onClick={handleAddVisit}
-                className="flex-1 rounded-xl bg-orange-500 px-2 py-2.5 text-xs font-bold text-white"
+                className="min-w-0 flex-1 whitespace-nowrap rounded-xl bg-orange-500 px-2 py-2.5 text-xs font-bold text-white"
                 aria-label="新增回憶"
               >
                 ＋ 新增回憶

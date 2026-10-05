@@ -14,6 +14,12 @@ import {
   setDoc,
   updateDoc,
 } from "firebase/firestore";
+import { useSessionState } from "@/lib/use-session-state";
+import { PlaceImportPanel } from "@/components/PlaceImportPanel";
+import { UpdateNotice } from "@/components/UpdateNotice";
+import { isSuitableNow } from "@/lib/timing";
+import { IdentityPanel } from "@/components/IdentityPanel";
+import { syncMergedIdentity, type IdentityProfile } from "@/lib/identity";
 import { BottomNav } from "@/components/BottomNav";
 import { MapView } from "@/components/MapView";
 import {
@@ -323,13 +329,15 @@ function buildVisitSummaryUpdate(visits: VisitItem[]) {
 
 export default function Home() {
   const hasCreatedInitialGroupRef = useRef(false);
-  const [activeTab, setActiveTab] = useState<TabId>("map");
+  const [activeTab, setActiveTab] = useSessionState<TabId>("map-memory-active-tab", "map");
   const [allGroups, setAllGroups] = useState<MapGroup[]>(FALLBACK_GROUPS);
   const [joinedGroupIds, setJoinedGroupIds] = useState<string[]>(() =>
     loadJoinedGroupIds(),
   );
   const [currentGroupId, setCurrentGroupId] = useState(DEFAULT_GROUP_ID);
   const [deviceId] = useState(() => getOrCreateDeviceId());
+  const [mergedDeviceIds, setMergedDeviceIds] = useState<string[]>([]);
+  const ownedDeviceIds = useMemo(() => [...new Set([deviceId, ...mergedDeviceIds])], [deviceId, mergedDeviceIds]);
   const [nickname, setNickname] = useState(() => loadNickname());
   const [newGroupName, setNewGroupName] = useState("");
   const [joinInviteCode, setJoinInviteCode] = useState("");
@@ -346,10 +354,12 @@ export default function Home() {
     string | null
   >(null);
   const [isLeavingGroup, setIsLeavingGroup] = useState(false);
+  const [importBlocked, setImportBlocked] = useState(false);
+  const [identityBlocked, setIdentityBlocked] = useState(false);
   const [isDeletingGroup, setIsDeletingGroup] = useState(false);
   const [places, setPlaces] = useState<PlaceItem[]>([]);
   const [selectedPlaceId, setSelectedPlaceId] = useState<string | null>(null);
-  const [filters, setFilters] = useState<PlaceFilters>(() => defaultFilters);
+  const [filters, setFilters] = useSessionState<PlaceFilters>("map-memory-list-filters", defaultFilters);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [formMode, setFormMode] = useState<"create" | "edit">("create");
   const [editingPlace, setEditingPlace] = useState<PlaceItem | null>(null);
@@ -364,6 +374,15 @@ export default function Home() {
   const [editingVisitId, setEditingVisitId] = useState<string | null>(null);
   const [editingVisitValues, setEditingVisitValues] =
     useState<VisitFormValues | null>(null);
+
+  useEffect(() => {
+    if (isLoadingPlaces) return;
+    const restore = Number(sessionStorage.getItem(`map-memory-scroll-${activeTab}`) || "0");
+    const frame = requestAnimationFrame(() => window.scrollTo(0, restore));
+    const save = () => sessionStorage.setItem(`map-memory-scroll-${activeTab}`, String(window.scrollY));
+    window.addEventListener("scroll", save, { passive: true });
+    return () => { cancelAnimationFrame(frame); window.removeEventListener("scroll", save); };
+  }, [activeTab, isLoadingPlaces]);
 
   const mapGroups = useMemo(
     () => getVisibleGroups(allGroups, joinedGroupIds),
@@ -381,7 +400,7 @@ export default function Home() {
 
   const currentGroupName = currentGroup?.name ?? "建立你的回憶地圖中...";
   const currentInviteCode = currentGroup?.inviteCode ?? "";
-  const isGroupOwner = currentGroup?.ownerDeviceId === deviceId;
+  const isGroupOwner = Boolean(currentGroup?.ownerDeviceId && ownedDeviceIds.includes(currentGroup.ownerDeviceId));
 
   const groupsCollectionRef = useMemo(() => collection(db, "groups"), []);
 
@@ -394,6 +413,27 @@ export default function Home() {
     () => collection(db, "groups", safeCurrentGroupId, "joinRequests"),
     [safeCurrentGroupId],
   );
+
+  const applyMergedIdentity = (profile: IdentityProfile) => {
+    setMergedDeviceIds(prev => JSON.stringify(prev) === JSON.stringify(profile.deviceIds) ? prev : profile.deviceIds);
+    setJoinedGroupIds(prev => { const next = Array.from(new Set([...prev, ...profile.groupIds])); return next.length === prev.length ? prev : next; });
+    setNickname(profile.nickname);
+  };
+
+  useEffect(() => onSnapshot(doc(db, "groups", "map-memory-identity-profiles", "info", deviceId), snapshot => {
+    if (!snapshot.exists()) return;
+    const profile = snapshot.data() as IdentityProfile;
+    if (!Array.isArray(profile.deviceIds) || !Array.isArray(profile.groupIds)) return;
+    applyMergedIdentity(profile);
+  }, error => console.error("讀取合併身分失敗", error)), [deviceId]);
+
+  useEffect(() => {
+    if (mergedDeviceIds.length < 2) return;
+    const timer = window.setTimeout(() => {
+      void syncMergedIdentity(ownedDeviceIds, joinedGroupIds, nickname).catch(error => console.error("同步合併身分失敗", error));
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [mergedDeviceIds.length, ownedDeviceIds, joinedGroupIds, nickname]);
 
   useEffect(() => {
     if (joinedGroupIds.length > 0) return;
@@ -586,7 +626,7 @@ export default function Home() {
         membersMap.set(currentGroup.ownerDeviceId, {
           deviceId: currentGroup.ownerDeviceId,
           nickname:
-            currentGroup.ownerDeviceId === deviceId
+            ownedDeviceIds.includes(currentGroup.ownerDeviceId)
               ? nickname.trim() || "我"
               : "群主",
           role: "owner",
@@ -608,13 +648,11 @@ export default function Home() {
           });
         });
 
-      if (deviceId && !membersMap.has(deviceId)) {
-        membersMap.set(deviceId, {
-          deviceId,
-          nickname: nickname.trim() || "我",
-          role: currentGroup?.ownerDeviceId === deviceId ? "owner" : "member",
-        });
-      }
+      // Collapse this user's aliases into one displayed member while retaining group ownership.
+      const ownEntries = Array.from(membersMap.values()).filter(member => ownedDeviceIds.includes(member.deviceId));
+      const ownRole = ownEntries.some(member => member.role === "owner") ? "owner" : "member";
+      ownEntries.forEach(member => membersMap.delete(member.deviceId));
+      membersMap.set(deviceId, { deviceId, nickname: nickname.trim() || "我", role: ownRole });
 
       const nextMembers = Array.from(membersMap.values()).sort((a, b) => {
         if (a.role !== b.role) return a.role === "owner" ? -1 : 1;
@@ -625,7 +663,7 @@ export default function Home() {
     });
 
     return () => unsubscribe();
-  }, [currentGroup?.ownerDeviceId, deviceId, joinRequestsCollectionRef, nickname]);
+  }, [currentGroup?.ownerDeviceId, deviceId, joinRequestsCollectionRef, nickname, ownedDeviceIds]);
 
   useEffect(() => {
     const placesQuery = query(
@@ -673,6 +711,7 @@ export default function Home() {
     const selectedTags = Array.isArray(filters.tags) ? filters.tags : [];
 
     return places.filter((place) => {
+      if (filters.suitableNow && !isSuitableNow(place)) return false;
       const placeTags = Array.isArray(place.tags) ? place.tags : [];
 
       const matchesKeyword =
@@ -764,6 +803,7 @@ export default function Home() {
   };
 
   const handleChangeGroup = (groupId: string) => {
+    if (importBlocked || identityBlocked) { window.alert("請先完成或取消目前操作，再切換群組"); return; }
     setSelectedPlaceId(null);
     setEditingPlace(null);
     setIsFormOpen(false);
@@ -1256,7 +1296,7 @@ export default function Home() {
 
       if (
         !targetVisit.authorDeviceId ||
-        targetVisit.authorDeviceId !== deviceId
+        !ownedDeviceIds.includes(targetVisit.authorDeviceId)
       ) {
         window.alert("只有建立這筆回憶的人可以刪除整筆回憶");
         return;
@@ -1481,14 +1521,14 @@ export default function Home() {
       className={`mx-auto w-full max-w-md bg-slate-50 ${
         activeTab === "map"
           ? "flex h-[100dvh] min-h-0 flex-col overflow-hidden"
-          : "min-h-screen px-4 pb-24 pt-4"
+          : activeTab === "list" ? "min-h-screen pb-24 pt-4" : "min-h-screen px-3 pb-24 pt-4"
       }`}
     >
       <header
         className={
           activeTab === "map"
             ? "shrink-0 border-b border-slate-100/90 bg-white/95 px-4 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))] backdrop-blur-md"
-            : "mb-4"
+            : activeTab === "list" ? "mb-4 px-4" : "mb-4"
         }
       >
         <div className="flex flex-col gap-2 rounded-xl border border-slate-100 bg-white px-3 py-2.5 shadow-sm">
@@ -1553,8 +1593,8 @@ export default function Home() {
         </div>
       ) : null}
 
-      {!isLoadingPlaces && activeTab === "map" && (
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+      {!isLoadingPlaces && (
+        <div style={{ display: activeTab === "map" ? "flex" : "none" }} className="min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <MapView
             places={places}
             selectedPlaceId={selectedPlaceId}
@@ -1566,6 +1606,7 @@ export default function Home() {
             onEditVisit={openEditVisitModal}
             onDeleteVisit={handleDeleteVisit}
             currentDeviceId={deviceId}
+            ownedDeviceIds={ownedDeviceIds}
             copyTargetGroups={mapGroups}
             currentGroupId={safeCurrentGroupId}
             onCopyPlaceToGroup={handleCopyPlaceToGroup}
@@ -1573,7 +1614,8 @@ export default function Home() {
         </div>
       )}
 
-      {!isLoadingPlaces && activeTab === "list" && (
+      {!isLoadingPlaces && (
+        <div style={{ display: activeTab === "list" ? "block" : "none" }}>
         <PlaceListView
           places={filteredPlaces}
           filters={filters}
@@ -1588,20 +1630,28 @@ export default function Home() {
           currentGroupId={safeCurrentGroupId}
           onCopyPlaceToGroup={handleCopyPlaceToGroup}
         />
+        </div>
       )}
 
-      {!isLoadingPlaces && activeTab === "timeline" && (
+      {!isLoadingPlaces && (
+        <div style={{ display: activeTab === "timeline" ? "block" : "none" }}>
         <TimelineView
           places={places}
           availableTags={availableTags}
           currentDeviceId={deviceId}
+            ownedDeviceIds={ownedDeviceIds}
           onEditVisit={openEditVisitModal}
           onDeleteVisit={handleDeleteVisit}
+          onAddVisit={openVisitModal}
           onReorderVisits={handleReorderTimelineVisits}
         />
+        </div>
       )}
 
       {!isLoadingPlaces && activeTab === "settings" && (
+        <div className="space-y-4">
+        <PlaceImportPanel key={safeCurrentGroupId} groupId={safeCurrentGroupId} groupName={currentGroupName} onBlockedChange={setImportBlocked} />
+        <IdentityPanel deviceId={deviceId} groupIds={joinedGroupIds} nickname={nickname} onMerged={applyMergedIdentity} onBlockedChange={setIdentityBlocked} />
         <SettingsView
           currentGroupName={currentGroupName}
           nickname={nickname}
@@ -1631,6 +1681,7 @@ export default function Home() {
           onLeaveGroup={handleLeaveCurrentGroup}
           onDeleteGroup={handleDeleteCurrentGroup}
         />
+        </div>
       )}
 
       <PlaceFormModal
@@ -1645,16 +1696,17 @@ export default function Home() {
         onSubmit={handleSubmitForm}
       />
 
-      <VisitFormModal
+      {isVisitModalOpen && <VisitFormModal
         isOpen={isVisitModalOpen}
         mode={visitFormMode}
         placeName={visitTargetPlace?.name ?? ""}
         currentAuthorName={nickname.trim() || "未命名"}
         currentDeviceId={deviceId}
+            ownedDeviceIds={ownedDeviceIds}
         initialValues={editingVisitValues}
         onClose={closeVisitModal}
         onSubmit={handleAddVisit}
-      />
+      />}
 
       {isJoinRequestPopupOpen ? (
         <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/40 p-4">
@@ -1721,7 +1773,8 @@ export default function Home() {
         </div>
       ) : null}
 
-      <BottomNav activeTab={activeTab} onChange={setActiveTab} />
+      <UpdateNotice blocked={isFormOpen || isVisitModalOpen || isCreatingGroup || isDeletingGroup || importBlocked || identityBlocked || Boolean(newGroupName.trim() || joinInviteCode.trim())} showVersion={activeTab === "settings"} />
+      <BottomNav activeTab={activeTab} onChange={tab => { if (importBlocked || identityBlocked) { window.alert("請先完成目前匯入或身分合併操作"); return; } setActiveTab(tab); requestAnimationFrame(() => window.dispatchEvent(new Event("resize"))); }} />
     </main>
   );
 }

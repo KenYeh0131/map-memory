@@ -14,6 +14,7 @@ const eslintConfig = defineConfig([
 
     // ignore scripts
     "scripts/**",
+    "apply_timeline_patch.cjs", // Historical one-off migration, not application code.
   ]),
 ]);
 

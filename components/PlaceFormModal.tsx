@@ -338,7 +338,7 @@ function buildInitialValues(initialPlace: PlaceItem | null): PlaceFormValues {
     lng: initialPlace?.lng,
     tagsText: initialPlace?.tags.join(", ") ?? "",
     placeUrl: initialPlace?.placeUrl ?? "",
-    navigationTarget: initialPlace?.navigationTarget ?? "",
+    navigationTarget: /^[.。．]+$/.test(initialPlace?.navigationTarget?.trim() ?? "") ? "" : initialPlace?.navigationTarget ?? "",
     navigationTargetLat: initialPlace?.navigationTargetLat,
     navigationTargetLng: initialPlace?.navigationTargetLng,
     notes: initialPlace?.notes ?? "",
@@ -363,6 +363,8 @@ export function PlaceFormModal({
     id: "map-memory-google-script",
     googleMapsApiKey: apiKey,
     libraries,
+    language: "zh-TW",
+    region: "TW",
   });
 
   const [previewPhoto, setPreviewPhoto] = useState<PhotoPreviewState>(null);
@@ -391,11 +393,8 @@ export function PlaceFormModal({
 
     if (!cached) return;
 
-    console.log("[Google API] cache hit", {
-      name: formValues.name,
-      address: debouncedAddress,
-    });
 
+    const timer = window.setTimeout(() => {
     setFormValues((prev) => {
       if (prev.lat === cached.lat && prev.lng === cached.lng) return prev;
 
@@ -403,22 +402,15 @@ export function PlaceFormModal({
         ...prev,
         lat: cached.lat,
         lng: cached.lng,
-        navigationTarget: cached.navigationTarget || prev.navigationTarget,
       };
     });
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [debouncedAddress, formValues.name]);
 
   const shouldUseAddressAutocomplete =
     isLoaded && debouncedAddress.length >= AUTOCOMPLETE_MIN_LENGTH;
 
-  useEffect(() => {
-    if (!shouldUseAddressAutocomplete) return;
-
-    console.log("[Google API] autocomplete enabled", {
-      addressLength: debouncedAddress.length,
-      debounceMs: AUTOCOMPLETE_DEBOUNCE_MS,
-    });
-  }, [debouncedAddress.length, shouldUseAddressAutocomplete]);
 
   const title = useMemo(
     () => (mode === "create" ? "新增地點" : "編輯地點"),
@@ -523,10 +515,6 @@ export function PlaceFormModal({
   };
 
   const handleAddressPlaceChanged = () => {
-    console.log("[Google API] request", {
-      source: "address autocomplete selected",
-      address: formValues.address,
-    });
 
     const place = addressAutocompleteRef.current?.getPlace();
 
@@ -543,26 +531,19 @@ export function PlaceFormModal({
       return;
     }
 
-    const navigationTarget =
-      place.name
-        ?.replace(/[^\u4e00-\u9fa5（）()、・．.－\-\s]/g, "")
-        .trim() ||
-      place.name ||
-      "";
     const pickedAddress = place.formatted_address || formValues.address;
-    const placeNameForCache = formValues.name.trim() || navigationTarget;
+    const placeNameForCache = formValues.name.trim() || place.name || "";
 
     writeCachedPlace(placeNameForCache, pickedAddress, {
       lat,
       lng,
-      navigationTarget,
+      navigationTarget: "",
       address: pickedAddress,
     });
 
     setFormValues((prev) => ({
       ...prev,
       address: pickedAddress,
-      navigationTarget: navigationTarget || prev.navigationTarget,
       lat,
       lng,
     }));
@@ -582,17 +563,13 @@ export function PlaceFormModal({
     const cached = readCachedPlace(formValues.name, nextAddress);
 
     if (cached) {
-      console.log("[Google API] cache hit", {
-        name: formValues.name,
-        address: nextAddress,
-      });
+
 
       setFormValues((prev) => ({
         ...prev,
         address: nextAddress,
         lat: cached.lat,
         lng: cached.lng,
-        navigationTarget: cached.navigationTarget || prev.navigationTarget,
       }));
       return;
     }

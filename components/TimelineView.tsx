@@ -1,12 +1,16 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
+import { useSessionState } from "@/lib/use-session-state";
+import { openGoogleMapsDirections } from "@/lib/navigation";
 import type { PlaceItem } from "@/lib/places";
 
 type TimelineViewProps = {
   places: PlaceItem[];
   availableTags: string[];
   currentDeviceId: string;
+  ownedDeviceIds: string[];
+  onAddVisit: (place: PlaceItem) => void;
   onEditVisit: (placeId: string, visitId: string) => void;
   onDeleteVisit: (placeId: string, visitId: string) => void;
   onReorderVisits: (
@@ -104,14 +108,15 @@ function moveItem<T>(items: T[], fromIndex: number, toIndex: number) {
 export function TimelineView({
   places,
   availableTags,
-  currentDeviceId,
+  ownedDeviceIds,
+  onAddVisit,
   onEditVisit,
   onDeleteVisit,
   onReorderVisits,
 }: TimelineViewProps) {
-  const [keyword, setKeyword] = useState("");
-  const [month, setMonth] = useState<string>("all");
-  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [keyword, setKeyword] = useSessionState("map-memory-timeline-keyword", "");
+  const [month, setMonth] = useSessionState<string>("map-memory-timeline-month", "all");
+  const [selectedTags, setSelectedTags] = useSessionState<string[]>("map-memory-timeline-tags", []);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [photoPreview, setPhotoPreview] = useState<PhotoPreviewState>(null);
   const [movingVisitKey, setMovingVisitKey] = useState<string | null>(null);
@@ -196,13 +201,13 @@ export function TimelineView({
     setSelectedTags((prev) =>
       prev.includes(tag) ? prev.filter((item) => item !== tag) : [...prev, tag],
     );
-  }, []);
+  }, [setSelectedTags]);
 
   const clearFilters = useCallback(() => {
     setKeyword("");
     setMonth("all");
     setSelectedTags([]);
-  }, []);
+  }, [setKeyword, setMonth, setSelectedTags]);
 
   const handleOpenPhotoPreview = useCallback((photos: string[], index: number) => {
     setPhotoPreview({ photos, index });
@@ -386,7 +391,7 @@ export function TimelineView({
                   const isMoving = movingVisitKey === visitKey;
                   const canDeleteVisit =
                     Boolean(visit.authorDeviceId) &&
-                    visit.authorDeviceId === currentDeviceId;
+                    ownedDeviceIds.includes(visit.authorDeviceId ?? "");
 
                   return (
                     <article
@@ -530,6 +535,10 @@ export function TimelineView({
                           </div>
                         </div>
 
+                        <div className="mt-3 grid grid-cols-2 gap-2">
+                          <button type="button" onClick={() => { if (!openGoogleMapsDirections(place)) window.alert("未設定導航資訊"); }} className="whitespace-nowrap rounded-xl bg-blue-500 px-2 py-2 text-xs font-bold text-white">🚕 立即出發</button>
+                          <button type="button" onClick={() => onAddVisit(place)} className="whitespace-nowrap rounded-xl bg-orange-500 px-2 py-2 text-xs font-bold text-white">＋ 新增回憶</button>
+                        </div>
                         <div className={`mt-3 grid gap-2 ${canDeleteVisit ? "grid-cols-2" : "grid-cols-1"}`}>
                           <button
                             type="button"

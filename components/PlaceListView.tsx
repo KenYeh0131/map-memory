@@ -1,5 +1,9 @@
 "use client";
 
+import { useSessionState } from "@/lib/use-session-state";
+import { localDateText } from "@/lib/dates";
+import { openGoogleMapsDirections } from "@/lib/navigation";
+
 import { useCallback, useMemo, useState } from "react";
 import { PlaceCard } from "@/components/PlaceCard";
 import type { BestTimingItem, PlaceItem, PlaceStatus } from "@/lib/places";
@@ -9,6 +13,7 @@ export type PlaceFilters = {
   status: "all" | PlaceStatus;
   minRating: number | "all";
   tags: string[];
+  suitableNow?: boolean;
 };
 
 type CopyTargetGroup = {
@@ -56,53 +61,6 @@ const TIMELINE_PHOTO_LIMIT = 2;
 
 
 
-function buildDirectionsUrl(place: PlaceItem) {
-  if (
-    typeof place.navigationTargetLat === "number" &&
-    Number.isFinite(place.navigationTargetLat) &&
-    typeof place.navigationTargetLng === "number" &&
-    Number.isFinite(place.navigationTargetLng)
-  ) {
-    return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
-      `${place.navigationTargetLat},${place.navigationTargetLng}`,
-    )}`;
-  }
-
-  if (place.navigationTarget?.trim()) {
-    return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
-      place.navigationTarget.trim(),
-    )}`;
-  }
-
-  if (
-    typeof place.lat === "number" &&
-    Number.isFinite(place.lat) &&
-    typeof place.lng === "number" &&
-    Number.isFinite(place.lng)
-  ) {
-    return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
-      `${place.lat},${place.lng}`,
-    )}`;
-  }
-
-  if (place.address?.trim()) {
-    return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
-      place.address.trim(),
-    )}`;
-  }
-
-  return "";
-}
-
-function openSmartGoogleMapsDirections(place: PlaceItem) {
-  const url = buildDirectionsUrl(place);
-
-  if (!url) return false;
-
-  window.open(url, "_blank", "noopener,noreferrer");
-  return true;
-}
-
 function formatDate(dateText?: string) {
   if (!dateText) return "";
   return dateText.replaceAll("-", "/");
@@ -123,7 +81,7 @@ function formatShortDate(dateText?: string) {
 }
 
 function getTodayDateText() {
-  return new Date().toISOString().slice(0, 10);
+  return localDateText();
 }
 
 function getCurrentMonth(today: string) {
@@ -347,9 +305,7 @@ export function PlaceListView({
   onCopyPlaceToGroup,
 }: PlaceListViewProps) {
   const [detailPlaceId, setDetailPlaceId] = useState<string | null>(null);
-  const [selectedRatings, setSelectedRatings] = useState<number[]>([
-    ...RATING_CHIPS,
-  ]);
+  const [selectedRatings, setSelectedRatings] = useSessionState<number[]>("map-memory-list-ratings", [...RATING_CHIPS]);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [photoPreview, setPhotoPreview] = useState<PhotoPreviewState>(null);
   const [copyModal, setCopyModal] = useState<CopyModalState>(null);
@@ -397,7 +353,7 @@ export function PlaceListView({
     return [...detailPlace.visits].sort((a, b) =>
       b.visitDate.localeCompare(a.visitDate)
     );
-  }, [detailPlace?.visits]);
+  }, [detailPlace]);
 
   const visiblePlaces = useMemo(() => {
     return places.filter((place) =>
@@ -411,9 +367,9 @@ export function PlaceListView({
     return (
       filters.keyword.trim().length > 0 ||
       selectedTags.length > 0 ||
-      hasRatingFilter
+      hasRatingFilter || Boolean(filters.suitableNow)
     );
-  }, [filters.keyword, selectedRatings.length, selectedTags.length]);
+  }, [filters.keyword, filters.suitableNow, selectedRatings.length, selectedTags.length]);
 
   const updateFilters = useCallback(
     (next: PlaceFilters) => {
@@ -428,6 +384,7 @@ export function PlaceListView({
         filters.keyword === next.keyword &&
         filters.status === next.status &&
         filters.minRating === next.minRating &&
+        filters.suitableNow === next.suitableNow &&
         sameTags;
 
       if (isSame) return;
@@ -460,7 +417,7 @@ export function PlaceListView({
 
       return [...prev, rating].sort((a, b) => a - b);
     });
-  }, []);
+  }, [setSelectedRatings]);
 
   const handleToggleTag = useCallback(
     (tag: string) => {
@@ -477,7 +434,7 @@ export function PlaceListView({
   );
 
   const handleStartNavigation = useCallback((place: PlaceItem) => {
-    const ok = openSmartGoogleMapsDirections(place);
+    const ok = openGoogleMapsDirections(place);
 
     if (!ok) {
       alert("未設定導航資訊");
@@ -581,7 +538,7 @@ export function PlaceListView({
   }, []);
 
   return (
-    <section className="space-y-4 px-4 pb-28 pt-3">
+    <section className="space-y-4 px-3 pb-28 pt-3">
       <div className="rounded-2xl border bg-white p-4 shadow-lg">
         <button
           type="button"
@@ -598,6 +555,7 @@ export function PlaceListView({
 
         {isFilterOpen ? (
           <div className="mt-3 space-y-3">
+            <button type="button" onClick={() => onFiltersChange({ ...filters, suitableNow: !filters.suitableNow })} className={`rounded-full px-3 py-2 text-xs font-bold ${filters.suitableNow ? "bg-amber-400" : "bg-slate-100"}`}>✨ 現在適合去</button>
             <input
               value={filters.keyword}
               onChange={(e) => handleKeywordChange(e.target.value)}

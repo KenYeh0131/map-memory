@@ -1,8 +1,9 @@
 
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { getDownloadURL, ref, uploadBytesResumable } from "firebase/storage";
+import { localDateText } from "@/lib/dates";
 import { storage } from "@/lib/firebase";
 import {
   RATING_LABELS,
@@ -26,6 +27,7 @@ type VisitFormModalProps = {
   placeName: string;
   currentAuthorName: string;
   currentDeviceId: string;
+  ownedDeviceIds: string[];
   initialValues?: VisitFormValues | null;
   onClose: () => void;
   onSubmit: (values: VisitFormValues) => void | Promise<void>;
@@ -47,7 +49,7 @@ const idleUploadStatus: UploadStatus = {
 };
 
 function todayText() {
-  return new Date().toISOString().slice(0, 10);
+  return localDateText();
 }
 
 function createMemoryNoteId() {
@@ -128,9 +130,9 @@ function sanitizeMemoryNotesForSubmit(
     .filter((item) => item.text.length > 0);
 }
 
-function canEditMemoryNote(note: MemoryNoteItem, currentDeviceId: string) {
+function canEditMemoryNote(note: MemoryNoteItem, ownedDeviceIds: string[]) {
   if (!note.authorDeviceId) return true;
-  return note.authorDeviceId === currentDeviceId;
+  return ownedDeviceIds.includes(note.authorDeviceId);
 }
 
 function loadImageFromObjectUrl(url: string): Promise<HTMLImageElement> {
@@ -239,46 +241,23 @@ export function VisitFormModal({
   placeName,
   currentAuthorName,
   currentDeviceId,
+  ownedDeviceIds,
   initialValues,
   onClose,
   onSubmit,
 }: VisitFormModalProps) {
-  const [visitDate, setVisitDate] = useState(todayText());
-  const [memoryNotes, setMemoryNotes] = useState<MemoryNoteItem[]>([]);
+  const initial = mode === "edit" ? initialValues : null;
+  const [visitDate, setVisitDate] = useState(() => initial?.visitDate || todayText());
+  const [memoryNotes, setMemoryNotes] = useState<MemoryNoteItem[]>(() => normalizeMemoryNotes(initial));
   const [newNoteText, setNewNoteText] = useState("");
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [editingNoteText, setEditingNoteText] = useState("");
-  const [photos, setPhotos] = useState<string[]>([]);
-  const [rating, setRating] = useState<number>(0);
+  const [photos, setPhotos] = useState<string[]>(() => initial?.photos ?? []);
+  const [rating, setRating] = useState<number>(initial?.rating ?? 0);
   const [isUploading, setIsUploading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [uploadStatus, setUploadStatus] =
     useState<UploadStatus>(idleUploadStatus);
-
-  useEffect(() => {
-    if (!isOpen) return;
-
-    if (mode === "edit" && initialValues) {
-      setVisitDate(initialValues.visitDate || todayText());
-      setMemoryNotes(normalizeMemoryNotes(initialValues));
-      setPhotos(
-        Array.isArray(initialValues.photos) ? initialValues.photos : [],
-      );
-      setRating(initialValues.rating ?? 0);
-    } else {
-      setVisitDate(todayText());
-      setMemoryNotes([]);
-      setPhotos([]);
-      setRating(0);
-    }
-
-    setNewNoteText("");
-    setEditingNoteId(null);
-    setEditingNoteText("");
-    setIsUploading(false);
-    setIsSaving(false);
-    setUploadStatus(idleUploadStatus);
-  }, [isOpen, mode, initialValues]);
 
   const previewPhotos = useMemo(() => photos.slice(0, PREVIEW_LIMIT), [photos]);
   const remainPhotoCount = useMemo(
@@ -310,7 +289,7 @@ export function VisitFormModal({
   };
 
   const startEditMemoryNote = (note: MemoryNoteItem) => {
-    if (!canEditMemoryNote(note, currentDeviceId)) return;
+    if (!canEditMemoryNote(note, ownedDeviceIds)) return;
 
     setEditingNoteId(note.id);
     setEditingNoteText(note.text);
@@ -328,7 +307,7 @@ export function VisitFormModal({
 
     setMemoryNotes((prev) =>
       prev.map((note) =>
-        note.id === editingNoteId && canEditMemoryNote(note, currentDeviceId)
+        note.id === editingNoteId && canEditMemoryNote(note, ownedDeviceIds)
           ? {
               ...note,
               text: trimmedText,
@@ -345,7 +324,7 @@ export function VisitFormModal({
   const deleteMemoryNote = (noteId: string) => {
     const targetNote = memoryNotes.find((note) => note.id === noteId);
 
-    if (!targetNote || !canEditMemoryNote(targetNote, currentDeviceId)) return;
+    if (!targetNote || !canEditMemoryNote(targetNote, ownedDeviceIds)) return;
 
     const ok = window.confirm("確定要刪除你寫的這段回憶嗎？");
 
@@ -724,7 +703,7 @@ export function VisitFormModal({
               {memoryNotes.length > 0 ? (
                 <div className="space-y-2">
                   {memoryNotes.map((memoryNote) => {
-                    const canEdit = canEditMemoryNote(memoryNote, currentDeviceId);
+                    const canEdit = canEditMemoryNote(memoryNote, ownedDeviceIds);
                     const isEditing = editingNoteId === memoryNote.id;
 
                     return (

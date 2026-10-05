@@ -2,6 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { GoogleMap, MarkerF, useJsApiLoader } from "@react-google-maps/api";
+import { useSessionState } from "@/lib/use-session-state";
+import { localDateText } from "@/lib/dates";
+import { isSuitableNow } from "@/lib/timing";
 import { PlaceCard } from "@/components/PlaceCard";
 import type { BestTimingItem, PlaceItem } from "@/lib/places";
 
@@ -21,6 +24,7 @@ type MapViewProps = {
   onEditVisit: (placeId: string, visitId: string) => void;
   onDeleteVisit: (placeId: string, visitId: string) => void;
   currentDeviceId: string;
+  ownedDeviceIds: string[];
   copyTargetGroups: CopyTargetGroup[];
   currentGroupId: string;
   onCopyPlaceToGroup: (
@@ -33,6 +37,7 @@ type MapFilterState = {
   query: string;
   stars: number[];
   tags: string[];
+  suitableNow?: boolean;
 };
 
 type PhotoPreviewState = {
@@ -91,7 +96,7 @@ function renderRating(rating?: number) {
 }
 
 function getTodayDateText() {
-  return new Date().toISOString().slice(0, 10);
+  return localDateText();
 }
 
 function getCurrentMonth(today: string) {
@@ -380,13 +385,13 @@ export function MapView({
   onAddVisit,
   onEditVisit,
   onDeleteVisit,
-  currentDeviceId,
+  ownedDeviceIds,
   copyTargetGroups,
   currentGroupId,
   onCopyPlaceToGroup,
 }: MapViewProps) {
   const [mapFilters, setMapFilters] =
-    useState<MapFilterState>(defaultMapFilters);
+    useSessionState<MapFilterState>("map-memory-map-filters", defaultMapFilters);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [currentPosition, setCurrentPosition] =
     useState<google.maps.LatLngLiteral | null>(null);
@@ -405,6 +410,8 @@ export function MapView({
     id: "map-memory-google-script",
     googleMapsApiKey: apiKey,
     libraries: GOOGLE_MAP_LIBRARIES,
+    language: "zh-TW",
+    region: "TW",
   });
 
   const todayText = useMemo(() => getTodayDateText(), []);
@@ -478,6 +485,7 @@ export function MapView({
     const q = mapFilters.query.trim().toLowerCase();
 
     return places.filter((place) => {
+      if (mapFilters.suitableNow && !isSuitableNow(place)) return false;
       if (
         mapFilters.stars.length > 0 &&
         !mapFilters.stars.includes(place.rating)
@@ -584,7 +592,7 @@ export function MapView({
         ? prev.stars.filter((s) => s !== star)
         : [...prev.stars, star],
     }));
-  }, []);
+  }, [setMapFilters]);
 
   const toggleTag = useCallback((tag: string) => {
     setMapFilters((prev) => ({
@@ -593,7 +601,7 @@ export function MapView({
         ? prev.tags.filter((t) => t !== tag)
         : [...prev.tags, tag],
     }));
-  }, []);
+  }, [setMapFilters]);
 
   const handleOpenTimeline = useCallback((place: PlaceItem) => {
     const hasVisits = Array.isArray(place.visits) && place.visits.length > 0;
@@ -743,7 +751,7 @@ export function MapView({
                     lat: place.lat ?? mapCenter.lat,
                     lng: place.lng ?? mapCenter.lng,
                   }}
-                  onClick={() => onSelectPlace(place.id)}
+                  onClick={() => { setIsFilterOpen(false); setTimelinePlace(null); onSelectPlace(place.id); }}
                   icon={markerIcons.get(place.id)}
                 />
               ))}
@@ -755,7 +763,7 @@ export function MapView({
               <div className="rounded-2xl border bg-white p-4 shadow-lg">
                 <button
                   type="button"
-                  onClick={() => setIsFilterOpen((open) => !open)}
+                  onClick={() => { onSelectPlace(null); setTimelinePlace(null); setCopyModalPlace(null); setIsFilterOpen((open) => !open); }}
                   className="flex w-full justify-between text-left"
                 >
                   <span className="font-bold">
@@ -766,6 +774,7 @@ export function MapView({
 
                 {isFilterOpen ? (
                   <div className="mt-3 space-y-3">
+                    <button type="button" onClick={() => setMapFilters(f => ({ ...f, suitableNow: !f.suitableNow }))} className={`rounded-full px-3 py-2 text-xs font-bold ${mapFilters.suitableNow ? "bg-amber-400" : "bg-slate-100"}`}>✨ 現在適合去</button>
                     <input
                       type="search"
                       value={mapFilters.query}
@@ -872,7 +881,7 @@ export function MapView({
                         const hiddenPhotoCount = Math.max(0, photos.length - 2);
                         const canDeleteVisit = Boolean(
                           visit.authorDeviceId &&
-                          visit.authorDeviceId === currentDeviceId,
+                          ownedDeviceIds.includes(visit.authorDeviceId ?? ""),
                         );
                         const rawMemoryNotes = Array.isArray(visit.memoryNotes)
                           ? visit.memoryNotes
