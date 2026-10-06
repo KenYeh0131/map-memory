@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Autocomplete, useJsApiLoader } from "@react-google-maps/api";
 import { getDownloadURL, ref, uploadBytesResumable } from "firebase/storage";
 import { storage } from "@/lib/firebase";
+import { currentPosition, coordinateAddress } from "@/lib/current-location";
 import {
   RATING_OPTIONS,
   RATING_LABELS,
@@ -371,6 +372,10 @@ export function PlaceFormModal({
   const [formValues, setFormValues] = useState<PlaceFormValues>(() =>
     buildInitialValues(initialPlace),
   );
+  const [locatingField, setLocatingField] = useState<"address" | "navigation" | null>(null);
+  const [locationFeedback, setLocationFeedback] = useState<{ field: "address" | "navigation"; message: string; error: boolean } | null>(null);
+  const locationRequestId = useRef(0);
+  useEffect(() => () => { locationRequestId.current += 1; }, [isOpen]);
   const [newTagText, setNewTagText] = useState("");
   const [errors, setErrors] = useState<{ name?: string; address?: string }>({});
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
@@ -604,7 +609,52 @@ export function PlaceFormModal({
     setNewTagText("");
   };
 
+  const handleCurrentLocation = async (field: "address" | "navigation") => {
+    if (locatingField) return;
+    const requestId = ++locationRequestId.current;
+    setLocatingField(field);
+    setLocationFeedback(null);
+    try {
+      const position = await currentPosition();
+      const lat = position.coords.latitude;
+      const lng = position.coords.longitude;
+      const coordinates = coordinateAddress(lat, lng);
+      let address = coordinates;
+      if (field === "address" && isLoaded && typeof google !== "undefined" && google.maps?.Geocoder) {
+        // Keep coordinates usable even if reverse geocoding fails or never responds.
+        address = await new Promise<string>(resolve => {
+          const timer = window.setTimeout(() => resolve(coordinates), 6000);
+          try {
+          new google.maps.Geocoder().geocode({ location: { lat, lng }, region: "TW" })
+            .then(result => resolve(result.results[0]?.formatted_address?.trim() || coordinates))
+            .catch(() => resolve(coordinates))
+            .finally(() => window.clearTimeout(timer));
+          } catch {
+            window.clearTimeout(timer);
+            resolve(coordinates);
+          }
+        });
+      }
+      if (requestId !== locationRequestId.current) return;
+      if (field === "address") {
+        writeCachedPlace(formValues.name, address, { address, lat, lng, navigationTarget: "" });
+        setFormValues(prev => ({ ...prev, address, lat, lng }));
+        setErrors(prev => ({ ...prev, address: undefined }));
+      } else {
+        setFormValues(prev => ({ ...prev, navigationTarget: coordinates, navigationTargetLat: lat, navigationTargetLng: lng }));
+      }
+      setLocationFeedback({ field, error: false, message: field === "address" && address === coordinates
+        ? "已使用目前經緯度；未取得地址，仍可儲存"
+        : field === "navigation" ? "已將目前經緯度設為導航目標" : "已使用目前位置的地址與經緯度" });
+    } catch (error) {
+      if (requestId === locationRequestId.current) setLocationFeedback({ field, error: true, message: error instanceof Error ? error.message : "定位失敗，請稍後再試" });
+    } finally {
+      if (requestId === locationRequestId.current) setLocatingField(null);
+    }
+  };
+
   const handleValidateAndSubmit = async () => {
+    if (locatingField) return;
     const nextErrors: { name?: string; address?: string } = {};
 
     if (!formValues.name.trim()) {
@@ -866,6 +916,10 @@ export function PlaceFormModal({
   };
 
   const handleRequestClose = () => {
+    if (locatingField) {
+      window.alert("正在取得目前位置，請稍候");
+      return;
+    }
     if (isUploadingPhoto) {
       window.alert("照片上傳中，請稍候");
       return;
@@ -928,6 +982,11 @@ export function PlaceFormModal({
               <span className={labelTitleClassName}>
                 地址
                 <span className="ml-1 font-bold text-red-500">(必填)</span>
+                <button type="button" aria-label="地址使用目前位置" disabled={Boolean(locatingField)}
+                  onClick={() => void handleCurrentLocation("address")}
+                  className="ml-2 rounded-md border border-orange-300 px-2 py-1 text-xs text-orange-700 disabled:opacity-50">
+                  {locatingField === "address" ? "定位中…" : "使用目前位置"}
+                </button>
               </span>
 
               {shouldUseAddressAutocomplete ? (
@@ -943,6 +1002,7 @@ export function PlaceFormModal({
                 >
                   <input
                     value={formValues.address}
+                    disabled={Boolean(locatingField)}
                     onChange={(event) =>
                       handleAddressInputChange(event.target.value)
                     }
@@ -953,6 +1013,7 @@ export function PlaceFormModal({
               ) : (
                 <input
                   value={formValues.address}
+                    disabled={Boolean(locatingField)}
                   onChange={(event) =>
                     handleAddressInputChange(event.target.value)
                   }
@@ -967,14 +1028,17 @@ export function PlaceFormModal({
                 </span>
               ) : null}
 
-              {formValues.lat && formValues.lng ? (
+              {locationFeedback?.field === "address" ? (
+                <span role={locationFeedback.error ? "alert" : "status"} className={`mt-1 block text-xs ${locationFeedback.error ? "text-rose-600" : "text-slate-600"}`}>{locationFeedback.message}</span>
+              ) : null}
+              {typeof formValues.lat === "number" && typeof formValues.lng === "number" ? (
                 <span className="mt-1 block text-[11px] font-medium text-slate-600">
                   已取得位置：{formValues.lat.toFixed(5)},{" "}
                   {formValues.lng.toFixed(5)}
                 </span>
               ) : (
                 <span className="mt-1 block text-[11px] font-bold text-amber-600">
-                  請從搜尋建議中選擇地點，才能取得正確地標位置
+                  請選擇搜尋建議或使用目前位置，以取得地標座標
                 </span>
               )}
             </label>
@@ -1336,10 +1400,17 @@ export function PlaceFormModal({
             </label>
 
             <label className="block text-sm">
-              <span className={labelTitleClassName}>導航目標</span>
+              <span className={labelTitleClassName}>導航目標
+                <button type="button" aria-label="導航目標使用目前位置" disabled={Boolean(locatingField)}
+                  onClick={() => void handleCurrentLocation("navigation")}
+                  className="ml-2 rounded-md border border-orange-300 px-2 py-1 text-xs text-orange-700 disabled:opacity-50">
+                  {locatingField === "navigation" ? "定位中…" : "使用目前位置"}
+                </button>
+              </span>
 
               <input
                 value={formValues.navigationTarget}
+                disabled={Boolean(locatingField)}
                 onChange={(event) => {
                   const nextValue = event.target.value;
                   const parsedCoordinates = parseCoordinateText(nextValue);
@@ -1355,6 +1426,9 @@ export function PlaceFormModal({
                 className={inputClassName}
               />
 
+              {locationFeedback?.field === "navigation" ? (
+                <span role={locationFeedback.error ? "alert" : "status"} className={`mt-1 block text-xs ${locationFeedback.error ? "text-rose-600" : "text-slate-600"}`}>{locationFeedback.message}</span>
+              ) : null}
               <span className="mt-1 block text-xs text-slate-500">
                 輸入地點文字時交給 Google Maps 搜尋；輸入經緯度時會直接導航到座標。
               </span>
@@ -1377,10 +1451,10 @@ export function PlaceFormModal({
           <button
             type="button"
             onClick={handleValidateAndSubmit}
-            disabled={isUploadingPhoto}
+            disabled={isUploadingPhoto || Boolean(locatingField)}
             className="w-full rounded-lg bg-orange-500 px-3 py-3 text-sm font-bold text-white shadow-lg disabled:bg-slate-400"
           >
-            {isUploadingPhoto
+            {locatingField ? "定位中…" : isUploadingPhoto
               ? "照片上傳中..."
               : mode === "create"
                 ? "新增地點"

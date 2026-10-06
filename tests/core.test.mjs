@@ -87,3 +87,22 @@ test('Merging a transfer code into its source device is blocked with no writes',
   const harness = identityHarness({ 'groups/map-memory-identity-transfers/info/CODE': { deviceId: 'old', used: false, expiresAt: Date.now() + 10000 } });
   await assert.rejects(harness.mergeIdentity('code', 'old', [], ''), /另一支手機/); assert.equal(harness.writes.length, 0);
 });
+
+
+test('Current location requests fresh high-accuracy coordinates', async () => {
+  const position = { coords: { latitude: 25.033, longitude: 121.5654 } };
+  const api = load('lib/current-location.ts', {}, { navigator: { geolocation: { getCurrentPosition(success, failure, options) {
+    assert.equal(options.enableHighAccuracy, true); assert.equal(options.maximumAge, 0); assert.equal(options.timeout, 15000); success(position);
+  } } } });
+  assert.equal(await api.currentPosition(), position);
+  assert.equal(api.coordinateAddress(25.033, 121.5654), '25.033000,121.565400');
+  assert.equal(api.coordinateAddress(0, 0), '0.000000,0.000000');
+  for (const [lat, lng] of [[NaN, 0], [0, Infinity], [91, 0], [0, -181]]) assert.throws(() => api.coordinateAddress(lat, lng), /座標無效/);
+});
+test('Current location explains unsupported, denied, unavailable and timed-out location', async () => {
+  await assert.rejects(load('lib/current-location.ts').currentPosition(), /不支援定位/);
+  for (const [code, message] of [[1, /權限未開放/], [2, /無法取得/], [3, /定位逾時/]]) {
+    const api = load('lib/current-location.ts', {}, { navigator: { geolocation: { getCurrentPosition(success, failure) { failure({ code }); } } } });
+    await assert.rejects(api.currentPosition(), message);
+  }
+});
